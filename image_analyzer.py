@@ -132,12 +132,26 @@ def get_optimal_text_placement(
         x_position = 0.5
 
     if return_metadata:
-        # Return detailed info including where subject is for text splitting
+        # Determine if text should be split
+        # Split when subject is in middle (text from top/bottom might extend into it)
+        # OR when text is placed in adjacent region (risk of overlap)
+        should_split = False
+        if subject_region:
+            if subject_region == 'middle':
+                # Subject in middle - text from top or bottom might extend into it
+                should_split = True
+            elif (best_region == 'top' and subject_region == 'middle') or \
+                 (best_region == 'bottom' and subject_region == 'middle') or \
+                 (best_region == 'top' and subject_region == 'top') or \
+                 (best_region == 'bottom' and subject_region == 'bottom'):
+                # Text adjacent to or overlapping subject
+                should_split = True
+
         return {
             'placement': (x_position, y_position),
             'subject_region': subject_region,
             'text_region': best_region,
-            'split_text': subject_region == best_region if subject_region else False
+            'split_text': should_split
         }
     else:
         return (x_position, y_position)
