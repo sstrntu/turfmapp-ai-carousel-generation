@@ -320,6 +320,13 @@
             </div>
           </div>
 
+          {% if slide.image_description %}
+          <div class="image-reasoning" style="background: rgba(100, 150, 255, 0.08); border-left-color: #6496ff;">
+            <div class="image-reasoning-label" style="color: #6496ff;">👁️ What's in this image?</div>
+            <div class="image-reasoning-text">"{{ slide.image_description }}"</div>
+          </div>
+          {% endif %}
+
           {% if slide.image_reasoning %}
           <div class="image-reasoning">
             <div class="image-reasoning-label">🤖 Why this image?</div>

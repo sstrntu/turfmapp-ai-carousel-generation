@@ -18,6 +18,7 @@ from env import load_env
 load_env()
 
 from config import MAX_SLIDES, OPENAI_MODEL
+from image_analyzer import analyze_all_images
 from image_search import download_image, search_images, search_web
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -631,7 +632,8 @@ def plan_slides(intent: str, image_paths: list[str], allow_external: bool, log=N
                 "source": "upload or external",
                 "filename": "best image for cover - most striking/representative",
                 "query": "search query if external",
-                "reasoning": "REQUIRED: Explain why this image is best for the cover (e.g., 'Most iconic/dramatic shot showing team celebration')"
+                "description": "REQUIRED: Describe what you see in this image (WHO: people/subjects visible, WHAT: action/scene, SETTING: location/context). Be specific and honest - if you can't identify someone, say so.",
+                "reasoning": "REQUIRED: Explain why this image is best for the cover based on what you described above"
             },
             "centering": [0.5, 0.35],
             "layout": {
@@ -649,7 +651,8 @@ def plan_slides(intent: str, image_paths: list[str], allow_external: bool, log=N
                     "source": "upload or external",
                     "filename": "use when source=upload (e.g., 'photo1.jpg')",
                     "query": "use when source=external (e.g., 'Tokyo skyline sunset')",
-                    "reasoning": "REQUIRED: Explain in 1 sentence why this specific image matches this slide's content (e.g., 'Shows player celebrating goal, matches scoring achievement theme' or 'Stadium crowd fits attendance record fact')"
+                    "description": "REQUIRED: Describe exactly what you see (WHO is in photo, WHAT they're doing, SETTING/context). Example: 'Team lineup photo before match - 11 players posing,No.10 visible in back row' or 'Crowd of fans waving flags - no individual subjects identifiable'",
+                    "reasoning": "REQUIRED: Explain why this image matches this slide's content, referencing what you described above"
                 },
                 "centering": [0.5, 0.35],
                 "layout": {
@@ -898,6 +901,129 @@ def _fetch_external_images(slides: list[dict[str, Any]], photos_dir: Path, log=N
     return replacements
 
 
+def _validate_image_matches(plan: dict[str, Any], log=None) -> dict[str, Any]:
+    """
+    Validate that image descriptions match slide content.
+    Uses AI to check if selected images actually align with text.
+    Returns updated plan with validation notes.
+    """
+    if log:
+        log("🔍 Validating image-text matches...")
+
+    client = OpenAI()
+
+    # Build validation prompt
+    slides_to_validate = []
+
+    # Check cover slide
+    cover = plan.get("cover_slide")
+    if cover:
+        img = cover.get("image", {})
+        slides_to_validate.append({
+            "slide_num": "Cover",
+            "title": cover.get("title", ""),
+            "body": cover.get("subtitle", ""),
+            "image_description": img.get("description", ""),
+            "image_reasoning": img.get("reasoning", ""),
+        })
+
+    # Check content slides
+    for i, slide in enumerate(plan.get("slides", []), 1):
+        img = slide.get("image", {})
+        slides_to_validate.append({
+            "slide_num": i,
+            "kicker": slide.get("kicker", ""),
+            "title": slide.get("title", ""),
+            "body": slide.get("body", ""),
+            "image_description": img.get("description", ""),
+            "image_reasoning": img.get("reasoning", ""),
+        })
+
+    validation_prompt = (
+        "You are a STRICT validator checking image-text matches for an Instagram carousel.\n\n"
+        "For each slide, check if the IMAGE DESCRIPTION actually shows what the TEXT is about.\n\n"
+        "STRICT Validation rules:\n"
+        "✓ GOOD: Description clearly shows the exact subject (e.g., text about manager → description shows manager)\n"
+        "✓ CONTEXTUAL: Description shows related scene that fans would understand (e.g., player at stadium for stadium topic)\n"
+        "⚠️ WEAK: Description is too vague or generic to verify the match\n"
+        "❌ BAD: Description shows WRONG subject (e.g., text about manager → description shows only crowd/fans)\n\n"
+        "BE STRICT:\n"
+        "- If text is about a PERSON but description doesn't show that person → BAD\n"
+        "- If description says 'no individual subjects visible' but text is about specific person → BAD\n"
+        "- If description shows 'team lineup' but text is about specific action/moment → WEAK\n\n"
+        "Respond with ONLY JSON array, one object per slide:\n"
+        '[{"slide": "number", "status": "good|contextual|weak|bad", "issue": "explanation if weak/bad"}]\n\n'
+        "Slides to validate:\n"
+    )
+
+    for slide_data in slides_to_validate:
+        validation_prompt += (
+            f"\nSlide {slide_data['slide_num']}:\n"
+            f"  Title: {slide_data['title']}\n"
+            f"  Body: {slide_data['body']}\n"
+            f"  Image description: {slide_data['image_description']}\n"
+            f"  AI reasoning: {slide_data['image_reasoning']}\n"
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": validation_prompt}],
+        )
+
+        validation_result = response.choices[0].message.content
+
+        # Parse JSON and count issues
+        weak_count = 0
+        bad_count = 0
+        issues = []
+
+        try:
+            # Try to extract JSON from response
+            import re
+            json_match = re.search(r'\[.*\]', validation_result, re.DOTALL)
+            if json_match:
+                validation_data = json.loads(json_match.group())
+                for item in validation_data:
+                    status = item.get("status", "").lower()
+                    if status == "weak":
+                        weak_count += 1
+                        issues.append(f"Slide {item.get('slide')}: WEAK - {item.get('issue', '')}")
+                    elif status == "bad":
+                        bad_count += 1
+                        issues.append(f"Slide {item.get('slide')}: BAD - {item.get('issue', '')}")
+        except Exception as parse_err:
+            # Fallback to simple counting
+            weak_count = validation_result.lower().count('"status": "weak"')
+            bad_count = validation_result.lower().count('"status": "bad"')
+
+        if log:
+            if bad_count > 0:
+                log(f"⚠️ Validation: {bad_count} BAD image-text matches found")
+                for issue in [i for i in issues if "BAD" in i]:
+                    log(f"  {issue}")
+            elif weak_count > 0:
+                log(f"⚠️ Validation: {weak_count} WEAK image-text matches found")
+                for issue in [i for i in issues if "WEAK" in i]:
+                    log(f"  {issue}")
+            else:
+                log("✓ Validation: All image-text matches look good")
+
+        # Store validation in plan metadata
+        plan["_validation"] = {
+            "result": validation_result,
+            "weak_count": weak_count,
+            "bad_count": bad_count,
+            "issues": issues
+        }
+
+    except Exception as e:
+        if log:
+            log(f"⚠️ Validation failed: {e}")
+
+    return plan
+
+
 def _build_config(
     intent: str,
     run_dir: Path,
@@ -908,7 +1034,18 @@ def _build_config(
     photos_dir = _ensure_photos_dir(run_dir)
     upload_names = _copy_uploads(uploads, photos_dir)
 
+    # Analyze images for optimal text placement (with split layout info)
+    if log:
+        log("🔍 Analyzing images for optimal text placement...")
+    image_paths = [str(photos_dir / name) for name in upload_names]
+    placement_map = analyze_all_images(image_paths, return_metadata=True)
+    if log:
+        log(f"✓ Analyzed {len(placement_map)} images for text placement")
+
     plan = plan_slides(intent, uploads, allow_external=allow_external, log=log)
+
+    # Validate image-text matches
+    plan = _validate_image_matches(plan, log=log)
 
     # Extract cover slide and content slides
     cover_slide_in = plan.get("cover_slide")
@@ -943,6 +1080,20 @@ def _build_config(
         # Fetch content slides images
         external_map = _fetch_external_images(slides_in, photos_dir, log=log)
 
+        # Analyze newly downloaded external images
+        new_images = []
+        if cover_external_filename:
+            new_images.append(str(photos_dir / cover_external_filename))
+        for filename in external_map.values():
+            if filename:
+                new_images.append(str(photos_dir / filename))
+
+        if new_images:
+            if log:
+                log(f"🔍 Analyzing {len(new_images)} external images for text placement...")
+            new_placements = analyze_all_images(new_images, return_metadata=True)
+            placement_map.update(new_placements)
+
     slides: list[dict[str, Any]] = []
     overrides: dict[int, list[str]] = {}
 
@@ -961,10 +1112,19 @@ def _build_config(
             # Pick the best/first uploaded image for cover
             filename = upload_names[0]
 
-        centering = cover_slide_in.get("centering") or [0.5, 0.35]
+        # Use intelligent placement based on image analysis
+        centering = cover_slide_in.get("centering")
+        split_layout = False
+        if not centering and filename and filename in placement_map:
+            metadata = placement_map[filename]
+            centering = list(metadata['placement'])
+            split_layout = metadata.get('split_text', False)
+        if not centering:
+            centering = [0.5, 0.35]  # Fallback to default
 
-        # Preserve image reasoning if provided
+        # Preserve image description and reasoning if provided
         image_data = cover_slide_in.get("image") or {}
+        image_description = image_data.get("description", "")
         image_reasoning = image_data.get("reasoning", "")
 
         cover_slide = {
@@ -973,6 +1133,7 @@ def _build_config(
             "title": cover_slide_in.get("title") or intent,
             "body": cover_slide_in.get("subtitle"),  # Subtitle becomes body
             "centering": centering,
+            "image_description": image_description,  # Preserve description
             "image_reasoning": image_reasoning,  # Preserve reasoning
         }
         slides.append(cover_slide)
@@ -980,8 +1141,20 @@ def _build_config(
         # Store layout override for cover (slide 1)
         layout = cover_slide_in.get("layout") or {}
         align = layout.get("align") or "center"
-        anchor = layout.get("anchor") or "mid"
         fade = layout.get("fade") or "mid"
+
+        # Use image analysis to determine anchor position instead of AI suggestion
+        anchor = "mid"  # default
+        if filename and filename in placement_map:
+            metadata = placement_map[filename]
+            y_pos = metadata['placement'][1]
+            if y_pos < 0.4:
+                anchor = "top"
+            elif y_pos > 0.6:
+                anchor = "bottom"
+            else:
+                anchor = "mid"
+
         overrides[1] = [align, anchor, fade]
 
     # Process content slides (become slides 2, 3, 4, etc.)
@@ -998,10 +1171,19 @@ def _build_config(
         if not filename and upload_names:
             filename = upload_names[i % len(upload_names)]
 
-        centering = s.get("centering") or [0.5, 0.35]
+        # Use intelligent placement based on image analysis
+        centering = s.get("centering")
+        split_layout = False
+        if not centering and filename and filename in placement_map:
+            metadata = placement_map[filename]
+            centering = list(metadata['placement'])
+            split_layout = metadata.get('split_text', False)
+        if not centering:
+            centering = [0.5, 0.35]  # Fallback to default
 
-        # Preserve image reasoning if provided
+        # Preserve image description and reasoning if provided
         image_data = s.get("image") or {}
+        image_description = image_data.get("description", "")
         image_reasoning = image_data.get("reasoning", "")
 
         slide = {
@@ -1010,17 +1192,30 @@ def _build_config(
             "title": s.get("title") or intent,
             "body": s.get("body"),
             "centering": centering,
+            "split_layout": split_layout,  # Flag for text splitting
+            "image_description": image_description,  # Preserve description
             "image_reasoning": image_reasoning,  # Preserve reasoning
         }
         slides.append(slide)
 
         layout = s.get("layout") or {}
-        align = layout.get("align")
-        anchor = layout.get("anchor")
-        fade = layout.get("fade")
-        if align and anchor and fade:
-            # Add offset to slide number (2, 3, 4, etc. if we have cover)
-            overrides[i + 1 + slide_offset] = [align, anchor, fade]
+        align = layout.get("align") or "center"
+        fade = layout.get("fade") or "mid"
+
+        # Use image analysis to determine anchor position instead of AI suggestion
+        anchor = "mid"  # default
+        if filename and filename in placement_map:
+            metadata = placement_map[filename]
+            y_pos = metadata['placement'][1]
+            if y_pos < 0.4:
+                anchor = "top"
+            elif y_pos > 0.6:
+                anchor = "bottom"
+            else:
+                anchor = "mid"
+
+        # Add offset to slide number (2, 3, 4, etc. if we have cover)
+        overrides[i + 1 + slide_offset] = [align, anchor, fade]
 
     output_dir = run_dir / "output"
 

@@ -250,7 +250,8 @@ def preview_plan_page(request: Request, run_id: str):
                 # Use photos subdirectory path
                 image_url = f"/run/{run_id}/photo/{photo_filename}"
 
-        # Get image reasoning - check both root level and image object
+        # Get image description and reasoning - check both root level and image object
+        image_description = slide.get("image_description") or image_data.get("description", "No description provided")
         image_reasoning = slide.get("image_reasoning") or image_data.get("reasoning", "No reasoning provided")
 
         slides.append({
@@ -261,6 +262,7 @@ def preview_plan_page(request: Request, run_id: str):
             "image_filename": photo_filename,
             "image_query": image_query,
             "image_url": image_url,
+            "image_description": image_description,
             "image_reasoning": image_reasoning,
         })
 

@@ -45,12 +45,14 @@ class SlideText:
     kicker: Optional[str]
     title: str
     body: Optional[str]
+    split_layout: bool = False  # If True, separate body from title
 
     def normalized(self) -> "SlideText":
         return SlideText(
             normalize_text(self.kicker),
             normalize_text(self.title) or "",
             normalize_text(self.body),
+            self.split_layout,
         )
 
 
@@ -65,7 +67,7 @@ class Spec:
     gap: int = 14
 
     # Type sizes - GRAND and BOLD like examples
-    kicker_size: int = 32
+    kicker_size: int = 48  # Increased for better visibility
     title_size: int = 120  # MUCH LARGER for grand impact
     body_size: int = 34
     slide_num_size: int = 24
@@ -595,19 +597,48 @@ def draw_text_block(
     mt = font_t.getMetrics(); ht = mt.fDescent - mt.fAscent
     mb = font_b.getMetrics(); hb = mb.fDescent - mb.fAscent
 
-    block_h = 0
-    if kicker_lines:
-        block_h += len(kicker_lines) * (hk + 6) + spec.gap
-    block_h += len(title_lines) * (ht + 2)
-    if body_lines:
-        block_h += spec.gap + len(body_lines) * (hb + 8)
+    # Check if we should split title and body
+    split_mode = getattr(slide, 'split_layout', False) and body_lines
 
-    if anchor == "top":
-        y_top = spec.margin_t
-    elif anchor == "mid":
-        y_top = (spec.H - block_h) * 0.50
+    if split_mode:
+        # Calculate title block height (kicker + title only)
+        title_block_h = 0
+        if kicker_lines:
+            title_block_h += len(kicker_lines) * (hk + 6) + spec.gap
+        title_block_h += len(title_lines) * (ht + 2)
+
+        # Calculate body block height
+        body_block_h = len(body_lines) * (hb + 8)
+
+        # Title block at anchor position
+        if anchor == "top":
+            y_top_title = spec.margin_t
+            # Body at opposite end (bottom)
+            y_top_body = spec.H - spec.margin_b - body_block_h
+        elif anchor == "mid":
+            # If mid, keep together (fallback to normal mode)
+            split_mode = False
+            block_h = title_block_h + spec.gap + body_block_h
+            y_top = (spec.H - block_h) * 0.50
+        else:  # bottom
+            y_top_title = spec.H - spec.margin_b - title_block_h
+            # Body at opposite end (top)
+            y_top_body = spec.margin_t
     else:
-        y_top = spec.H - spec.margin_b - block_h
+        # Normal mode: all text together
+        block_h = 0
+        if kicker_lines:
+            block_h += len(kicker_lines) * (hk + 6) + spec.gap
+        block_h += len(title_lines) * (ht + 2)
+        if body_lines:
+            block_h += spec.gap + len(body_lines) * (hb + 8)
+
+        if anchor == "top":
+            y_top = spec.margin_t
+        elif anchor == "mid":
+            y_top = (spec.H - block_h) * 0.50
+        else:
+            y_top = spec.H - spec.margin_b - block_h
 
     def x_for(line: str, font: skia.Font) -> float:
         if align == "center":
@@ -644,7 +675,8 @@ def draw_text_block(
             a = 120 if kind == 'title' else 90
         return skia.Paint(AntiAlias=True, Color=skia.ColorSetARGB(a, 0, 0, 0))
 
-    y = y_top
+    # Set starting y position (title block)
+    y = y_top_title if split_mode else y_top
 
     # Kicker
     for line in kicker_lines:
@@ -677,7 +709,11 @@ def draw_text_block(
 
     # Body
     if body_lines:
-        y += spec.gap
+        # If split mode, jump to body position; otherwise continue from title
+        if split_mode:
+            y = y_top_body
+        else:
+            y += spec.gap
         for line in body_lines:
             x = x_for(line, font_b)
             baseline = y - mb.fAscent
