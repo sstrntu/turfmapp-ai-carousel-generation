@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Review Slide Plan</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .slide-preview {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 0;
+      margin-bottom: 20px;
+      transition: all 0.2s;
+      overflow: hidden;
+      display: flex;
+      gap: 0;
+    }
+
+    .slide-preview:hover {
+      border-color: var(--accent);
+      box-shadow: 0 4px 20px rgba(245, 183, 0, 0.1);
+    }
+
+    .slide-image-preview {
+      flex: 0 0 40%;
+      position: relative;
+      background: #000;
+      min-height: 300px;
+    }
+
+    .slide-image-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .slide-image-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .slide-content {
+      flex: 1;
+      padding: 24px;
+    }
+
+    .slide-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: var(--accent);
+      color: #111;
+      border-radius: 50%;
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    .slide-type {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(255, 107, 107, 0.15);
+      color: var(--accent-2);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-left: 8px;
+    }
+
+    .slide-kicker {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      padding: 4px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .slide-kicker:focus {
+      background: rgba(245, 183, 0, 0.1);
+    }
+
+    .slide-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 12px;
+      line-height: 1.3;
+      padding: 4px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .slide-title:focus {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .slide-body {
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+      margin-bottom: 12px;
+      padding: 4px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .slide-body:focus {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .editable-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 8px;
+      opacity: 0.7;
+    }
+
+    .slide-image-info {
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .slide-image-info .icon {
+      font-size: 18px;
+    }
+
+    .image-reasoning {
+      margin-top: 12px;
+      padding: 12px;
+      background: rgba(245, 183, 0, 0.08);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .image-reasoning-label {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 6px;
+    }
+
+    .image-reasoning-text {
+      color: var(--text);
+      font-style: italic;
+    }
+
+    .approval-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-top: 40px;
+      padding-top: 32px;
+      border-top: 1px solid var(--panel-border);
+    }
+
+    .btn {
+      padding: 16px 48px;
+      border-radius: 999px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .btn-approve {
+      background: var(--accent);
+      color: #111;
+    }
+
+    .btn-approve:hover {
+      background: #ffc933;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(245, 183, 0, 0.4);
+    }
+
+    .btn-reject {
+      background: rgba(255, 107, 107, 0.2);
+      color: var(--accent-2);
+      border: 2px solid var(--accent-2);
+    }
+
+    .btn-reject:hover {
+      background: rgba(255, 107, 107, 0.3);
+      transform: translateY(-2px);
+    }
+
+    .summary-stats {
+      display: flex;
+      gap: 24px;
+      justify-content: center;
+      margin: 32px 0;
+      padding: 24px;
+      background: rgba(245, 183, 0, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(245, 183, 0, 0.2);
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <main class="shell">
+    <header class="hero">
+      <div class="badge">Review Plan</div>
+      <h1>Review Your Slide Structure</h1>
+      <p>Check the titles, text, and images before we generate the graphics.</p>
+    </header>
+
+    <section class="panel">
+      <div class="summary-stats">
+        <div class="stat">
+          <div class="stat-value">{{ slide_count }}</div>
+          <div class="stat-label">Slides</div>
+        </div>
+        {% if has_cover %}
+        <div class="stat">
+          <div class="stat-value">1</div>
+          <div class="stat-label">Cover Slide</div>
+        </div>
+        {% endif %}
+        <div class="stat">
+          <div class="stat-value">{{ content_count }}</div>
+          <div class="stat-label">Content Slides</div>
+        </div>
+      </div>
+
+      {% for slide in slides %}
+      <div class="slide-preview" data-slide-index="{{ loop.index0 }}">
+        <!-- Image Preview -->
+        <div class="slide-image-preview">
+          {% if slide.image_source == "upload" and slide.image_url %}
+          <img src="{{ slide.image_url }}" alt="Slide {{ loop.index }} preview">
+          {% else %}
+          <div class="slide-image-placeholder">
+            <div>
+              {% if slide.image_source == "external" %}
+              🌐<br>External image will be<br>downloaded during generation<br><br>"{{ slide.image_query }}"
+              {% else %}
+              🖼️<br>Image preview<br>not available
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Text Content -->
+        <div class="slide-content">
+          <div>
+            <span class="slide-number">{{ loop.index }}</span>
+            {% if loop.index == 1 and not slide.kicker %}
+            <span class="slide-type">Cover</span>
+            {% endif %}
+          </div>
+
+          {% if slide.kicker or loop.index != 1 %}
+          <div class="slide-kicker" contenteditable="true" data-field="kicker">{{ slide.kicker or "Click to add kicker..." }}</div>
+          {% endif %}
+
+          <h2 class="slide-title" contenteditable="true" data-field="title">{{ slide.title }}</h2>
+
+          <p class="slide-body" contenteditable="true" data-field="body">{{ slide.body or "Click to add body text..." }}</p>
+
+          <div class="editable-hint">💡 Click any text to edit it</div>
+
+          <div class="slide-image-info">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span class="icon">🖼️</span>
+              <span>
+                {% if slide.image_source == "upload" %}
+                Uploaded: <strong>{{ slide.image_filename }}</strong>
+                {% else %}
+                External: "{{ slide.image_query }}"
+                {% endif %}
+              </span>
+            </div>
+          </div>
+
+          {% if slide.image_reasoning %}
+          <div class="image-reasoning">
+            <div class="image-reasoning-label">🤖 Why this image?</div>
+            <div class="image-reasoning-text">"{{ slide.image_reasoning }}"</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="approval-actions">
+        <button class="btn btn-reject" id="rejectBtn">⚠️ Cancel & Start Over</button>
+        <button class="btn btn-approve" id="approveBtn">✓ Approve & Generate Graphics</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const runId = "{{ run_id }}";
+
+    // Collect edited text from all slides
+    function collectEdits() {
+      const slides = [];
+      document.querySelectorAll(".slide-preview").forEach(preview => {
+        const slideIndex = parseInt(preview.dataset.slideIndex);
+
+        const kicker = preview.querySelector('[data-field="kicker"]');
+        const title = preview.querySelector('[data-field="title"]');
+        const body = preview.querySelector('[data-field="body"]');
+
+        slides.push({
+          index: slideIndex,
+          kicker: kicker ? kicker.textContent.trim() : null,
+          title: title ? title.textContent.trim() : "",
+          body: body ? body.textContent.trim() : null
+        });
+      });
+      return slides;
+    }
+
+    document.getElementById("approveBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("approveBtn");
+      btn.disabled = true;
+      btn.textContent = "🎨 Generating...";
+
+      // Collect any text edits
+      const edits = collectEdits();
+
+      try {
+        const res = await fetch(`/api/approve-plan/${runId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ edits })
+        });
+
+        if (res.ok) {
+          // Redirect to run page to watch rendering
+          window.location.href = `/run/${runId}`;
+        } else {
+          alert("Failed to approve plan");
+          btn.disabled = false;
+          btn.textContent = "✓ Approve & Generate Graphics";
+        }
+      } catch (err) {
+        alert("Error: " + err.message);
+        btn.disabled = false;
+        btn.textContent = "✓ Approve & Generate Graphics";
+      }
+    });
+
+    document.getElementById("rejectBtn").addEventListener("click", () => {
+      if (confirm("Cancel this run and start over?")) {
+        window.location.href = "/";
+      }
+    });
+  </script>
+</body>
+</html>

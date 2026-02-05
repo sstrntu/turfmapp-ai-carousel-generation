@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IG Carousel Studio</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <main class="shell">
+    <header class="hero">
+      <div class="badge">IG Carousel Studio</div>
+      <h1>Turn intent into a multi‑slide story.</h1>
+      <p>Upload photos, describe the story, and let the pipeline build a carousel with layout‑aware text.</p>
+    </header>
+
+    <section class="panel">
+      <form class="form" action="/generate" method="post" enctype="multipart/form-data">
+        <label class="label">Intent</label>
+        <textarea class="textarea" name="intent" rows="4" placeholder="Example: Tell a story about Mito Holly Hock." required>{{ intent }}</textarea>
+
+        <label class="label">Photos</label>
+        <input class="file" type="file" name="files" multiple accept="image/*" required />
+        <div class="helper">Upload 1–30 images. The model will pick the best fits.</div>
+
+        <label class="checkbox">
+          <input type="checkbox" name="allow_external" {% if allow_external %}checked{% endif %} />
+          Allow external search if uploads do not fit the story
+        </label>
+
+        {% if error %}
+          <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <button class="button" type="submit">Generate carousel</button>
+      </form>
+    </section>
+
+    {% if result %}
+    <section class="panel results">
+      <div class="results-header">
+        <h2>Outputs</h2>
+        <a class="download" href="/download/{{ result.run_id }}">Download ZIP</a>
+      </div>
+
+      <div class="grid">
+        {% for name in result.outputs %}
+        <figure class="card">
+          <button class="zoom" type="button" data-src="/runs/{{ result.run_id }}/{{ name }}" aria-label="Open {{ name }}">
+            <img src="/runs/{{ result.run_id }}/{{ name }}" alt="{{ name }}" />
+          </button>
+          <figcaption>{{ name }}</figcaption>
+        </figure>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <footer class="foot">
+      <span>Run ID is stored server-side for downloads.</span>
+    </footer>
+  </main>
+
+  <div class="lightbox" id="lightbox" aria-hidden="true">
+    <button class="lightbox-close" type="button" aria-label="Close preview">✕</button>
+    <button class="lightbox-nav lightbox-prev" type="button" aria-label="Previous image">‹</button>
+    <button class="lightbox-nav lightbox-next" type="button" aria-label="Next image">›</button>
+    <img class="lightbox-img" id="lightboxImg" alt="Expanded preview" />
+    <div class="lightbox-counter" id="lightboxCounter"></div>
+  </div>
+
+  <script>
+    const lightbox = document.getElementById("lightbox");
+    const lightboxImg = document.getElementById("lightboxImg");
+    const closeBtn = document.querySelector(".lightbox-close");
+    const prevBtn = document.querySelector(".lightbox-prev");
+    const nextBtn = document.querySelector(".lightbox-next");
+    const counterEl = document.getElementById("lightboxCounter");
+
+    let currentImages = [];
+    let currentIndex = 0;
+
+    // Collect all image sources
+    const zoomButtons = document.querySelectorAll(".zoom");
+    currentImages = Array.from(zoomButtons).map(btn => btn.getAttribute("data-src"));
+
+    zoomButtons.forEach((btn, idx) => {
+      btn.addEventListener("click", () => {
+        openLightbox(idx);
+      });
+    });
+
+    function openLightbox(index) {
+      currentIndex = index;
+      updateLightbox();
+      lightbox.classList.add("open");
+      lightbox.setAttribute("aria-hidden", "false");
+    }
+
+    function updateLightbox() {
+      lightboxImg.src = currentImages[currentIndex];
+      counterEl.textContent = `${currentIndex + 1} / ${currentImages.length}`;
+      prevBtn.disabled = currentIndex === 0;
+      nextBtn.disabled = currentIndex === currentImages.length - 1;
+    }
+
+    function navigate(direction) {
+      const newIndex = currentIndex + direction;
+      if (newIndex >= 0 && newIndex < currentImages.length) {
+        currentIndex = newIndex;
+        updateLightbox();
+      }
+    }
+
+    function closeLightbox() {
+      lightbox.classList.remove("open");
+      lightbox.setAttribute("aria-hidden", "true");
+      lightboxImg.src = "";
+    }
+
+    closeBtn.addEventListener("click", closeLightbox);
+    prevBtn.addEventListener("click", () => navigate(-1));
+    nextBtn.addEventListener("click", () => navigate(1));
+
+    lightbox.addEventListener("click", (e) => {
+      if (e.target === lightbox) closeLightbox();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (!lightbox.classList.contains("open")) return;
+      if (e.key === "Escape") closeLightbox();
+      if (e.key === "ArrowLeft") navigate(-1);
+      if (e.key === "ArrowRight") navigate(1);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+{
+  "enabled": true,
+  "qc_enabled": true,
+  "qc_config": {
+    "description": "Quality control settings - AI reviews slides before output",
+    "enabled": true,
+    "checks": {
+      "story_alignment": true,
+      "text_image_match": true,
+      "placement_rules": true,
+      "consistency": true,
+      "completeness": true
+    },
+    "auto_fix": true,
+    "log_findings": true
+  },
+  "global_preferences": {
+    "description": "General preferences applied to all slides",
+    "vary_placement": true,
+    "avoid_faces": true,
+    "prefer_fade_backgrounds": true,
+    "default_centering": [0.5, 0.35]
+  },
+  "placement_rules": {
+    "description": "Rules for choosing text position based on image analysis",
+    "align": {
+      "left": "Use when main subject is on the right side, or empty space on left. Good for portraits facing right.",
+      "center": "Use for centered subjects, symmetrical compositions, or balanced images. Good for landscapes.",
+      "right": "Use when main subject is on the left side, or empty space on right. Good for portraits facing left."
+    },
+    "anchor": {
+      "top": "Use when lower portion has detail (people, buildings, action at ground level). Keeps text above the action.",
+      "mid": "Use for evenly distributed compositions or when top/bottom are equally busy. Creates centered balance.",
+      "bottom": "Use when upper portion is important (sky, mountains, architecture). Places text below main subjects."
+    },
+    "fade": {
+      "top": "Dark gradient from top. ALWAYS pair with anchor='top' for consistency.",
+      "mid": "Dark center band. ALWAYS pair with anchor='mid' for emphasis.",
+      "bottom": "Dark gradient from bottom. ALWAYS pair with anchor='bottom' for consistency.",
+      "none": "No background overlay. Only use for very simple, low-detail, or solid-color backgrounds."
+    }
+  },
+  "slide_type_preferences": {
+    "description": "Preferred layouts for different slide types (optional)",
+    "cover_slide": {
+      "preferred_align": "center",
+      "preferred_anchor": "mid",
+      "preferred_fade": "mid",
+      "note": "COVER SLIDE (Slide 1) - The opening slide that introduces the carousel. Use the most striking image, center alignment for maximum impact, bold attention-grabbing title"
+    },
+    "opening_slide": {
+      "preferred_align": "center",
+      "preferred_anchor": "mid",
+      "preferred_fade": "mid",
+      "note": "First content slide (Slide 2 if cover exists) - bold centered statement"
+    },
+    "portrait_photo": {
+      "preferred_align": "left",
+      "preferred_anchor": "top",
+      "preferred_fade": "top",
+      "note": "For photos with people - keep text away from faces"
+    },
+    "landscape_photo": {
+      "preferred_align": "center",
+      "preferred_anchor": "bottom",
+      "preferred_fade": "bottom",
+      "note": "For scenic photos - text at bottom to preserve sky/scenery"
+    },
+    "action_shot": {
+      "preferred_align": "right",
+      "preferred_anchor": "top",
+      "preferred_fade": "top",
+      "note": "For sports/movement - text opposite the action direction"
+    },
+    "closing_slide": {
+      "preferred_align": "center",
+      "preferred_anchor": "bottom",
+      "preferred_fade": "bottom",
+      "note": "Last slide - centered call-to-action"
+    }
+  },
+  "custom_rules": {
+    "description": "Add your own custom rules here",
+    "examples": [
+      "Never use center alignment for slides 2-4 (only first and last)",
+      "Always use bottom anchor for slides with sky",
+      "Prefer right alignment for slides with text-heavy content",
+      "Use fade='none' sparingly - only when background is very simple"
+    ],
+    "your_rules": [
+      "CRITICAL: Text must NEVER cover faces, heads, or upper bodies of people",
+      "For photos with people: ALWAYS use anchor='bottom' to keep text below subjects",
+      "For portraits/close-ups: Text must be in bottom 25% of image only",
+      "ALWAYS use fade gradient (top/mid/bottom) - NEVER use fade='none'",
+      "Prefer anchor='bottom' as default unless image has important ground-level detail",
+      "For action shots: Place text opposite to the direction of movement",
+      "Text must fit within margins - reduce text length if needed to prevent overflow"
+    ]
+  },
+  "forbidden_combinations": {
+    "description": "Combinations to avoid",
+    "rules": [
+      "Never pair anchor='top' with fade='bottom'",
+      "Never pair anchor='bottom' with fade='top'",
+      "NEVER use fade='none' - always use gradient backgrounds",
+      "NEVER use anchor='top' or anchor='mid' for photos with people/faces",
+      "NEVER place text in the upper 50% of images containing people",
+      "For portrait orientation subjects: ONLY use anchor='bottom'",
+      "Text length must not exceed image width - wrap or shorten text"
+    ]
+  }
+}

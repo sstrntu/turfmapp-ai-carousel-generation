@@ -1,0 +1,86 @@
+{
+  "photos_dir": "/Users/sirasasitorn/Desktop/Test Project",
+  "output_dir": "/Users/sirasasitorn/Desktop/Test Project/Output/Mito HollyHock History Carousel (Skia) v2",
+  "logo_path": "/Users/sirasasitorn/.openclaw/workspace/assets/logos/Logo JL.png",
+  "spec": {"logo_pad": 60, "logo_size": 84},
+  "slides": [
+    {
+      "photo": "JLG25170_217.jpg",
+      "kicker": "J.League Club Spotlight",
+      "title": "MITO HOLLYHOCK HISTORY",
+      "body": "A quick timeline - roots, identity, and matchday culture.",
+      "centering": [0.52, 0.45]
+    },
+    {
+      "photo": "MITO_LOGO.png",
+      "kicker": "The beginning",
+      "title": "SINCE 1994",
+      "body": "The crest carries the founding year - a reminder of where it all started.",
+      "centering": [0.50, 0.50]
+    },
+    {
+      "photo": "Assets/External/commons_mito/Hollypitch.png",
+      "kicker": "Identity",
+      "title": "WHY HOLLYHOCK?",
+      "body": "The hollyhock motif connects the club to local symbols and community pride.",
+      "centering": [0.52, 0.52]
+    },
+    {
+      "photo": "Assets/External/orig/JRE_Mito-STA_Platform3-4.jpg",
+      "kicker": "The city",
+      "title": "MITO, IBARAKI",
+      "body": "A club story is also a place story - the journey fans take every matchday.",
+      "centering": [0.50, 0.45]
+    },
+    {
+      "photo": "Assets/External/orig/Ksdenki_stadium_façade.jpg",
+      "kicker": "Home",
+      "title": "THE STADIUM ERA",
+      "body": "Where history is written - one match at a time.",
+      "centering": [0.55, 0.55]
+    },
+    {
+      "photo": "JLG25083_097.jpg",
+      "kicker": "Support",
+      "title": "FANS ARE THE CONSTANT",
+      "body": "Players change. The stands keep the story going.",
+      "centering": [0.52, 0.50]
+    },
+    {
+      "photo": "Assets/External/commons_mito/Kit_body_Mito_HollyHock_2024_HOME_FP.png",
+      "kicker": "Colors",
+      "title": "KITS THROUGH TIME",
+      "body": "Every season leaves a look - and a memory.",
+      "centering": [0.50, 0.50]
+    },
+    {
+      "photo": "JLG25114_056.jpg",
+      "kicker": "The work",
+      "title": "BUILT ON THE DAILY",
+      "body": "Training, repetition, and small gains that become a season.",
+      "centering": [0.55, 0.42]
+    },
+    {
+      "photo": "JLG25223_055.jpg",
+      "kicker": "Moments",
+      "title": "SNAPSHOTS IN TIME",
+      "body": "Goals, tackles, celebrations - the highlights fans remember.",
+      "centering": [0.55, 0.32]
+    },
+    {
+      "photo": "JLG25102_076.jpg",
+      "kicker": "CTA",
+      "title": "WATCH THE NEXT CHAPTER",
+      "body": "Follow official J.League channels and catch Mito HollyHock in action.",
+      "centering": [0.62, 0.34]
+    }
+  ],
+  "overrides": {
+    "1": ["left", "mid", "none"],
+    "2": ["center", "mid", "none"],
+    "3": ["left", "bottom", "none"],
+    "4": ["center", "top", "none"],
+    "7": ["center", "mid", "none"],
+    "10": ["left", "top", "none"]
+  }
+}

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IG Carousel Run</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+
+  <main class="shell">
+    <header class="hero">
+      <div class="badge">Run {{ run_id }}</div>
+      <h1>Generating carousel…</h1>
+      <p>Status updates will appear below.</p>
+    </header>
+
+    {% if intent %}
+    <section class="panel intent-display">
+      <h3 class="intent-label">Your Intent:</h3>
+      <p class="intent-text">{{ intent }}</p>
+      {% if allow_external %}
+      <span class="intent-badge">✓ External search enabled</span>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="status" id="status">Status: {{ status }}</div>
+      <div class="spinner" id="spinner"></div>
+      <ul class="log" id="log">
+        {% for line in logs %}
+          <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="panel results" id="results" style="display:none;">
+      <div class="results-header">
+        <h2>Outputs</h2>
+        <a class="download" id="downloadLink" href="#">Download ZIP</a>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <footer class="foot">
+      <span>Keep this tab open while the run completes.</span>
+    </footer>
+  </main>
+
+  <div class="lightbox" id="lightbox" aria-hidden="true">
+    <button class="lightbox-close" type="button" aria-label="Close preview">✕</button>
+    <button class="lightbox-nav lightbox-prev" type="button" aria-label="Previous image">‹</button>
+    <button class="lightbox-nav lightbox-next" type="button" aria-label="Next image">›</button>
+    <img class="lightbox-img" id="lightboxImg" alt="Expanded preview" />
+    <div class="lightbox-counter" id="lightboxCounter"></div>
+    <button class="lightbox-edit" id="lightboxEdit" type="button">Edit Text</button>
+  </div>
+
+  <div class="editor-modal" id="editorModal" aria-hidden="true">
+    <div class="editor-container">
+      <div class="editor-header">
+        <h2>Edit Text</h2>
+        <p class="editor-hint">Click and drag text to move it. Double-click to edit content. Click Save to re-render.</p>
+        <button class="editor-close" id="editorClose" type="button">✕</button>
+      </div>
+      <div class="editor-canvas-wrapper" id="editorCanvasWrapper">
+        <canvas id="editorCanvas"></canvas>
+        <div id="editorOverlays"></div>
+      </div>
+      <div class="editor-footer">
+        <button class="button-secondary" id="editorCancel">Cancel</button>
+        <button class="button-primary" id="editorSave">Save & Re-render</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const runId = "{{ run_id }}";
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const resultsEl = document.getElementById("results");
+    const gridEl = document.getElementById("grid");
+    const spinner = document.getElementById("spinner");
+    const downloadLink = document.getElementById("downloadLink");
+
+    const lightbox = document.getElementById("lightbox");
+    const lightboxImg = document.getElementById("lightboxImg");
+    const closeBtn = document.querySelector(".lightbox-close");
+    const prevBtn = document.querySelector(".lightbox-prev");
+    const nextBtn = document.querySelector(".lightbox-next");
+    const counterEl = document.getElementById("lightboxCounter");
+
+    let currentImages = [];
+    let currentIndex = 0;
+
+    function renderGrid(outputs) {
+      gridEl.innerHTML = "";
+      currentImages = outputs.map(name => `/runs/${runId}/${name}`);
+
+      outputs.forEach((name, idx) => {
+        const figure = document.createElement("figure");
+        figure.className = "card";
+
+        const btn = document.createElement("button");
+        btn.className = "zoom";
+        btn.type = "button";
+        btn.dataset.index = idx;
+
+        const img = document.createElement("img");
+        img.src = `/runs/${runId}/${name}`;
+        img.alt = name;
+
+        const caption = document.createElement("figcaption");
+        caption.textContent = name;
+
+        btn.appendChild(img);
+        figure.appendChild(btn);
+        figure.appendChild(caption);
+        gridEl.appendChild(figure);
+
+        btn.addEventListener("click", () => {
+          openLightbox(idx);
+        });
+      });
+    }
+
+    function openLightbox(index) {
+      currentIndex = index;
+      updateLightbox();
+      lightbox.classList.add("open");
+      lightbox.setAttribute("aria-hidden", "false");
+    }
+
+    function updateLightbox() {
+      lightboxImg.src = currentImages[currentIndex];
+      counterEl.textContent = `${currentIndex + 1} / ${currentImages.length}`;
+      prevBtn.disabled = currentIndex === 0;
+      nextBtn.disabled = currentIndex === currentImages.length - 1;
+    }
+
+    function navigate(direction) {
+      const newIndex = currentIndex + direction;
+      if (newIndex >= 0 && newIndex < currentImages.length) {
+        currentIndex = newIndex;
+        updateLightbox();
+      }
+    }
+
+    function closeLightbox() {
+      lightbox.classList.remove("open");
+      lightbox.setAttribute("aria-hidden", "true");
+      lightboxImg.src = "";
+    }
+
+    closeBtn.addEventListener("click", closeLightbox);
+    prevBtn.addEventListener("click", () => navigate(-1));
+    nextBtn.addEventListener("click", () => navigate(1));
+
+    lightbox.addEventListener("click", (e) => {
+      if (e.target === lightbox) closeLightbox();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (!lightbox.classList.contains("open")) return;
+      if (e.key === "Escape") closeLightbox();
+      if (e.key === "ArrowLeft") navigate(-1);
+      if (e.key === "ArrowRight") navigate(1);
+    });
+
+    // Editor functionality
+    const editBtn = document.getElementById("lightboxEdit");
+    const editorModal = document.getElementById("editorModal");
+    const editorClose = document.getElementById("editorClose");
+    const editorCancel = document.getElementById("editorCancel");
+    const editorSave = document.getElementById("editorSave");
+    const editorCanvas = document.getElementById("editorCanvas");
+    const editorOverlays = document.getElementById("editorOverlays");
+    const ctx = editorCanvas.getContext("2d");
+
+    let currentSlideNum = 0;
+    let textElements = [];
+
+    editBtn.addEventListener("click", () => {
+      currentSlideNum = currentIndex + 1;
+      openEditor();
+    });
+
+    function openEditor() {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = currentImages[currentIndex];
+      img.onload = () => {
+        // Set canvas size
+        const maxW = Math.min(window.innerWidth * 0.8, 1080);
+        const scale = maxW / img.width;
+        editorCanvas.width = img.width * scale;
+        editorCanvas.height = img.height * scale;
+
+        // Draw image
+        ctx.drawImage(img, 0, 0, editorCanvas.width, editorCanvas.height);
+
+        // Load text elements for this slide (we'll fetch from config)
+        fetchSlideConfig(currentSlideNum).then(config => {
+          createDraggableElements(config);
+          editorModal.classList.add("open");
+          editorModal.setAttribute("aria-hidden", "false");
+        });
+      };
+    }
+
+    function closeEditor() {
+      editorModal.classList.remove("open");
+      editorModal.setAttribute("aria-hidden", "true");
+      editorOverlays.innerHTML = "";
+      textElements = [];
+    }
+
+    async function fetchSlideConfig(slideNum) {
+      // Fetch the run config to get text positions
+      const res = await fetch(`/api/slide-config/${runId}/${slideNum}`);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    function createDraggableElements(config) {
+      if (!config) return;
+
+      // Create draggable overlays for each text element
+      const scale = editorCanvas.width / 1080;
+
+      textElements = [];
+      editorOverlays.innerHTML = "";
+
+      // Add kicker, title, body as draggable elements
+      if (config.kicker) {
+        createDraggable("kicker", config.kicker, config.kicker_pos, scale);
+      }
+      createDraggable("title", config.title, config.title_pos, scale);
+      if (config.body) {
+        createDraggable("body", config.body, config.body_pos, scale);
+      }
+    }
+
+    function createDraggable(type, text, pos, scale) {
+      const wrapper = document.createElement("div");
+      wrapper.className = `draggable-text draggable-${type}`;
+      wrapper.style.left = (pos.x * scale) + "px";
+      wrapper.style.top = (pos.y * scale) + "px";
+
+      const textEl = document.createElement("div");
+      textEl.className = "text-content";
+      textEl.contentEditable = "true";
+      textEl.textContent = text;
+      textEl.dataset.originalText = text;
+
+      wrapper.appendChild(textEl);
+
+      let isDragging = false;
+      let isEditing = false;
+      let startX, startY, initialX, initialY;
+
+      // Make text draggable by default, editable on double-click
+      wrapper.addEventListener("mousedown", (e) => {
+        if (isEditing) return; // Don't drag while editing
+
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        initialX = wrapper.offsetLeft;
+        initialY = wrapper.offsetTop;
+        wrapper.classList.add("dragging");
+
+        // Disable editing while dragging
+        textEl.contentEditable = "false";
+        e.preventDefault();
+      });
+
+      const onMouseMove = (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        wrapper.style.left = (initialX + dx) + "px";
+        wrapper.style.top = (initialY + dy) + "px";
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+
+      document.addEventListener("mouseup", () => {
+        if (isDragging) {
+          wrapper.classList.remove("dragging");
+          isDragging = false;
+          // Re-enable editing after drag
+          textEl.contentEditable = "true";
+        }
+      });
+
+      // Double-click to enter edit mode
+      textEl.addEventListener("dblclick", (e) => {
+        isEditing = true;
+        textEl.focus();
+        // Select all text for easy editing
+        const range = document.createRange();
+        range.selectNodeContents(textEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        e.stopPropagation();
+      });
+
+      // Exit edit mode on blur
+      textEl.addEventListener("blur", () => {
+        isEditing = false;
+      });
+
+      editorOverlays.appendChild(wrapper);
+      textElements.push({ type, element: wrapper, textElement: textEl, scale });
+    }
+
+    editorClose.addEventListener("click", closeEditor);
+    editorCancel.addEventListener("click", closeEditor);
+
+    editorSave.addEventListener("click", async () => {
+      // Collect new positions
+      const positions = textElements.map(te => ({
+        type: te.type,
+        x: parseInt(te.element.style.left) / te.scale,
+        y: parseInt(te.element.style.top) / te.scale
+      }));
+
+      // Collect text updates
+      const textUpdates = {};
+      textElements.forEach(te => {
+        const newText = te.textElement.textContent.trim();
+        const originalText = te.textElement.dataset.originalText;
+        if (newText !== originalText) {
+          textUpdates[te.type] = newText;
+        }
+      });
+
+      // Send to server to re-render
+      const res = await fetch(`/api/update-slide/${runId}/${currentSlideNum}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          positions,
+          text_updates: Object.keys(textUpdates).length > 0 ? textUpdates : null
+        })
+      });
+
+      if (res.ok) {
+        closeEditor();
+        // Refresh the image
+        currentImages[currentIndex] = currentImages[currentIndex] + "?t=" + Date.now();
+        lightboxImg.src = currentImages[currentIndex];
+        alert("Slide re-rendered! Refreshing...");
+        location.reload();
+      } else {
+        const error = await res.text();
+        alert("Failed to save changes: " + error);
+      }
+    });
+
+    async function poll() {
+      const res = await fetch(`/api/status/${runId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      statusEl.textContent = `Status: ${data.status}`;
+      logEl.innerHTML = "";
+      data.logs.forEach((line) => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        logEl.appendChild(li);
+      });
+
+      // Redirect to preview page if awaiting approval
+      if (data.status === "awaiting_approval") {
+        window.location.href = `/run/${runId}/preview`;
+        return;
+      }
+
+      if (data.status === "done") {
+        spinner.style.display = "none";
+        resultsEl.style.display = "block";
+        downloadLink.href = data.download_url;
+        renderGrid(data.outputs || []);
+      }
+
+      if (data.status === "error") {
+        spinner.style.display = "none";
+      }
+    }
+
+    poll();
+    setInterval(poll, 2000);
+  </script>
+</body>
+</html>
