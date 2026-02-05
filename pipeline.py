@@ -962,82 +962,75 @@ def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=Non
     if not image_data_list:
         return plan
 
-    # Ask AI to re-describe images and compare
-    verification_prompt = (
-        "You are verifying image descriptions for accuracy.\n\n"
-        "For each image, you will see:\n"
-        "1. Original description (what AI initially said was in the image)\n"
-        "2. The actual image\n\n"
-        "Your job: Check if the original description is ACCURATE.\n\n"
-        "Common errors to catch:\n"
-        "❌ Claiming 'player #10' when image shows coach/manager\n"
-        "❌ Claiming 'action shot' when image shows celebration/portrait\n"
-        "❌ Claiming specific people when only crowd visible\n"
-        "❌ Claiming 'controlling ball' when person is celebrating\n\n"
-        "For each image, respond:\n"
-        '{"slide": "number", "accurate": true/false, "issue": "explanation if inaccurate", "corrected": "accurate description if needed"}\n\n'
-        "Images to verify:\n"
-    )
-
-    # Create messages with images
-    messages = [{"role": "user", "content": [{"type": "text", "text": verification_prompt}]}]
+    # Verify images ONE AT A TIME to avoid payload size limits
+    all_results = []
+    inaccurate_count = 0
+    issues = []
 
     for item in image_data_list:
-        messages[0]["content"].append({
-            "type": "text",
-            "text": f"\nSlide {item['slide']} - Original description: \"{item['original_description']}\""
-        })
-        messages[0]["content"].append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{item['base64']}"}
-        })
-
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
+        verification_prompt = (
+            "You are verifying an image description for accuracy.\n\n"
+            f"Original description: \"{item['original_description']}\"\n\n"
+            "Your job: Check if this description ACCURATELY describes what's in the image.\n\n"
+            "Common errors to catch:\n"
+            "❌ Claiming 'player #10' when image shows coach/manager\n"
+            "❌ Claiming 'action shot' when image shows celebration/portrait\n"
+            "❌ Claiming specific people when only crowd visible\n"
+            "❌ Claiming 'controlling ball' when person is celebrating\n\n"
+            "Respond with JSON:\n"
+            '{"accurate": true/false, "issue": "explanation if inaccurate", "corrected": "accurate description if needed"}\n'
         )
 
-        verification_result = response.choices[0].message.content
-
-        # Parse and count issues
-        inaccurate_count = 0
-        issues = []
-
         try:
-            import re
-            json_match = re.search(r'\[.*\]', verification_result, re.DOTALL)
-            if json_match:
-                verification_data = json.loads(json_match.group())
-                for item in verification_data:
-                    if not item.get("accurate", True):
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": verification_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{item['base64']}"}}
+                    ]
+                }],
+            )
+
+            result_text = response.choices[0].message.content
+            all_results.append(f"Slide {item['slide']}: {result_text}")
+
+            # Parse result
+            try:
+                import re
+                json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+                if json_match:
+                    result_data = json.loads(json_match.group())
+                    if not result_data.get("accurate", True):
                         inaccurate_count += 1
-                        issue_text = f"Slide {item.get('slide')}: {item.get('issue', 'Inaccurate description')}"
-                        if item.get('corrected'):
-                            issue_text += f" → Corrected: {item.get('corrected')}"
+                        issue_text = f"Slide {item['slide']}: {result_data.get('issue', 'Inaccurate')}"
+                        if result_data.get('corrected'):
+                            issue_text += f" → {result_data.get('corrected')}"
                         issues.append(issue_text)
-        except Exception as parse_err:
-            # Fallback counting
-            inaccurate_count = verification_result.lower().count('"accurate": false')
+            except:
+                pass
 
-        if log:
-            if inaccurate_count > 0:
-                log(f"⚠️ Stage 1: {inaccurate_count} INACCURATE image descriptions found!")
-                for issue in issues:
-                    log(f"  {issue}")
-            else:
-                log("✓ Stage 1: All image descriptions verified accurate")
+        except Exception as item_err:
+            if log:
+                log(f"  ⚠️ Failed to verify slide {item['slide']}: {item_err}")
 
-        # Store verification results
-        plan["_description_verification"] = {
-            "result": verification_result,
-            "inaccurate_count": inaccurate_count,
-            "issues": issues
-        }
+    verification_result = "\n".join(all_results)
 
-    except Exception as e:
-        if log:
-            log(f"⚠️ Stage 1 verification failed: {e}")
+    if log:
+        if inaccurate_count > 0:
+            log(f"⚠️ Stage 1: {inaccurate_count} INACCURATE image descriptions found!")
+            for issue in issues:
+                log(f"  {issue}")
+        else:
+            log("✓ Stage 1: All image descriptions verified accurate")
+
+    # Store verification results
+    plan["_description_verification"] = {
+        "result": verification_result,
+        "inaccurate_count": inaccurate_count,
+        "issues": issues
+    }
 
     return plan
 

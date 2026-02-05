@@ -103,10 +103,11 @@ def get_optimal_text_placement(
             # Bright areas (high brightness) get high scores (bad)
             score += brightness[region] / 255.0 * 100
 
-        # Subject avoidance scoring
+        # Subject avoidance scoring (HIGH PRIORITY - avoid subject at all costs)
         if avoid_subject and subject_region == region:
-            # Add penalty for regions with detected subjects
-            score += 50
+            # Add HEAVY penalty for regions with detected subjects
+            # This ensures we NEVER place text over subjects regardless of brightness
+            score += 500
 
         scores[region] = score
 
