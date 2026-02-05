@@ -824,8 +824,9 @@ def main():
             kicker = s.get("kicker")
             title = s.get("title") or ""
             body = s.get("body")
+            split_layout = s.get("split_layout", False)
             centering = tuple(s.get("centering") or [0.5, 0.35])
-            slides.append((photo, SlideText(kicker, title, body).normalized(), centering))
+            slides.append((photo, SlideText(kicker, title, body, split_layout).normalized(), centering))
 
         overrides_raw = cfg.get("overrides") or {}
         overrides: dict[int, tuple[str, str, str]] = {}

@@ -1253,10 +1253,11 @@ def _build_config(
         # Use intelligent placement based on image analysis
         centering = cover_slide_in.get("centering")
         split_layout = False
-        if not centering and filename and filename in placement_map:
+        if filename and filename in placement_map:
             metadata = placement_map[filename]
-            centering = list(metadata['placement'])
             split_layout = metadata.get('split_text', False)
+            if not centering:
+                centering = list(metadata['placement'])
         if not centering:
             centering = [0.5, 0.35]  # Fallback to default
 
@@ -1312,10 +1313,11 @@ def _build_config(
         # Use intelligent placement based on image analysis
         centering = s.get("centering")
         split_layout = False
-        if not centering and filename and filename in placement_map:
+        if filename and filename in placement_map:
             metadata = placement_map[filename]
-            centering = list(metadata['placement'])
             split_layout = metadata.get('split_text', False)
+            if not centering:
+                centering = list(metadata['placement'])
         if not centering:
             centering = [0.5, 0.35]  # Fallback to default
 
