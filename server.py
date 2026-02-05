@@ -216,7 +216,7 @@ def run_status_page(request: Request, run_id: str):
 
 @app.get("/run/{run_id}/preview", response_class=HTMLResponse)
 def preview_plan_page(request: Request, run_id: str):
-    """Show slide plan preview for user approval"""
+    """Show slide plan preview for user approval (or re-editing after generation)"""
     run = RUNS.get(run_id) or _load_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
@@ -224,6 +224,9 @@ def preview_plan_page(request: Request, run_id: str):
     plan = run.get("plan")
     if not plan:
         raise HTTPException(status_code=404, detail="plan not found")
+
+    # Allow preview in both awaiting_approval and done states
+    is_rerender = run["status"] == "done"
 
     config = plan["config"]
     slides_data = config.get("slides", [])
@@ -274,6 +277,7 @@ def preview_plan_page(request: Request, run_id: str):
             "slide_count": len(slides),
             "has_cover": has_cover,
             "content_count": content_count,
+            "is_rerender": is_rerender,
         },
     )
 
@@ -466,12 +470,13 @@ class ApproveRequest(BaseModel):
 
 @app.post("/api/approve-plan/{run_id}")
 def approve_plan(run_id: str, payload: ApproveRequest = None):
-    """User approves the slide plan - continue with rendering"""
+    """User approves the slide plan - continue with rendering (or re-rendering if already done)"""
     run = RUNS.get(run_id) or _load_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
 
-    if run["status"] != "awaiting_approval":
+    # Allow approval from awaiting_approval (initial) or done (re-rendering)
+    if run["status"] not in ("awaiting_approval", "done"):
         raise HTTPException(status_code=400, detail=f"Cannot approve - status is {run['status']}")
 
     plan = run.get("plan")
@@ -500,11 +505,17 @@ def approve_plan(run_id: str, payload: ApproveRequest = None):
         _save_run(run_id, RUNS[run_id])
         _log(run_id, "✓ Text edits applied")
 
+    # Check if this is a re-render or initial render
+    is_rerender = run["status"] == "done"
+
     # Continue with rendering in background
     def _render_worker():
         try:
             _set_status(run_id, "rendering")
-            _log(run_id, "✓ Plan approved - starting graphics rendering")
+            if is_rerender:
+                _log(run_id, "✓ Re-rendering graphics with updated text")
+            else:
+                _log(run_id, "✓ Plan approved - starting graphics rendering")
 
             from pipeline import render_from_plan
 

@@ -40,7 +40,10 @@
     <section class="panel results" id="results" style="display:none;">
       <div class="results-header">
         <h2>Outputs</h2>
-        <a class="download" id="downloadLink" href="#">Download ZIP</a>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <a class="button-secondary" id="editAgainBtn" href="#">✏️ Edit & Re-Generate</a>
+          <a class="download" id="downloadLink" href="#">Download ZIP</a>
+        </div>
       </div>
       <div class="grid" id="grid"></div>
     </section>
@@ -386,6 +389,12 @@
         resultsEl.style.display = "block";
         downloadLink.href = data.download_url;
         renderGrid(data.outputs || []);
+
+        // Enable edit button
+        const editBtn = document.getElementById("editAgainBtn");
+        if (editBtn) {
+          editBtn.href = `/run/${runId}/preview`;
+        }
       }
 
       if (data.status === "error") {

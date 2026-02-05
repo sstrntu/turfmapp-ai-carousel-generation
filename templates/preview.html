@@ -246,9 +246,9 @@
 
   <main class="shell">
     <header class="hero">
-      <div class="badge">Review Plan</div>
-      <h1>Review Your Slide Structure</h1>
-      <p>Check the titles, text, and images before we generate the graphics.</p>
+      <div class="badge">{% if is_rerender %}Re-Edit Plan{% else %}Review Plan{% endif %}</div>
+      <h1>{% if is_rerender %}Edit and Re-Generate{% else %}Review Your Slide Structure{% endif %}</h1>
+      <p>{% if is_rerender %}Make text changes and re-render the graphics.{% else %}Check the titles, text, and images before we generate the graphics.{% endif %}</p>
     </header>
 
     <section class="panel">
@@ -331,14 +331,20 @@
       {% endfor %}
 
       <div class="approval-actions">
+        {% if is_rerender %}
+        <button class="btn btn-reject" id="rejectBtn">⬅ Back to Results</button>
+        <button class="btn btn-approve" id="approveBtn">✓ Re-Generate Graphics</button>
+        {% else %}
         <button class="btn btn-reject" id="rejectBtn">⚠️ Cancel & Start Over</button>
         <button class="btn btn-approve" id="approveBtn">✓ Approve & Generate Graphics</button>
+        {% endif %}
       </div>
     </section>
   </main>
 
   <script>
     const runId = "{{ run_id }}";
+    const isRerender = {{ 'true' if is_rerender else 'false' }};
 
     // Collect edited text from all slides
     function collectEdits() {
@@ -391,8 +397,14 @@
     });
 
     document.getElementById("rejectBtn").addEventListener("click", () => {
-      if (confirm("Cancel this run and start over?")) {
-        window.location.href = "/";
+      if (isRerender) {
+        // Go back to results page
+        window.location.href = `/run/${runId}`;
+      } else {
+        // Cancel and start over
+        if (confirm("Cancel this run and start over?")) {
+          window.location.href = "/";
+        }
       }
     });
   </script>
