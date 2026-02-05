@@ -901,14 +901,155 @@ def _fetch_external_images(slides: list[dict[str, Any]], photos_dir: Path, log=N
     return replacements
 
 
+def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=None) -> dict[str, Any]:
+    """
+    Stage 1: Verify image descriptions are accurate (double-check with second AI call).
+    Catches misidentifications like "player #10" when it's actually "coach/manager".
+    """
+    if log:
+        log("🔍 Stage 1: Verifying image descriptions...")
+
+    client = OpenAI()
+
+    # Collect all images that need verification
+    images_to_verify = []
+
+    # Cover slide
+    cover = plan.get("cover_slide")
+    if cover:
+        img = cover.get("image", {})
+        if img.get("description"):
+            images_to_verify.append({
+                "slide": "Cover",
+                "description": img.get("description"),
+                "filename": img.get("filename", "")
+            })
+
+    # Content slides
+    for i, slide in enumerate(plan.get("slides", []), 1):
+        img = slide.get("image", {})
+        if img.get("description"):
+            images_to_verify.append({
+                "slide": i,
+                "description": img.get("description"),
+                "filename": img.get("filename", "")
+            })
+
+    if not images_to_verify:
+        return plan
+
+    # Load and encode images for second opinion
+    image_data_list = []
+    for item in images_to_verify:
+        filename = item["filename"]
+        # Find the actual image file
+        image_path = None
+        for upload_path in uploads:
+            if Path(upload_path).name == filename:
+                image_path = upload_path
+                break
+
+        if image_path and os.path.exists(image_path):
+            with open(image_path, "rb") as f:
+                base64_image = base64.b64encode(f.read()).decode("utf-8")
+                image_data_list.append({
+                    "slide": item["slide"],
+                    "original_description": item["description"],
+                    "base64": base64_image,
+                    "filename": filename
+                })
+
+    if not image_data_list:
+        return plan
+
+    # Ask AI to re-describe images and compare
+    verification_prompt = (
+        "You are verifying image descriptions for accuracy.\n\n"
+        "For each image, you will see:\n"
+        "1. Original description (what AI initially said was in the image)\n"
+        "2. The actual image\n\n"
+        "Your job: Check if the original description is ACCURATE.\n\n"
+        "Common errors to catch:\n"
+        "❌ Claiming 'player #10' when image shows coach/manager\n"
+        "❌ Claiming 'action shot' when image shows celebration/portrait\n"
+        "❌ Claiming specific people when only crowd visible\n"
+        "❌ Claiming 'controlling ball' when person is celebrating\n\n"
+        "For each image, respond:\n"
+        '{"slide": "number", "accurate": true/false, "issue": "explanation if inaccurate", "corrected": "accurate description if needed"}\n\n'
+        "Images to verify:\n"
+    )
+
+    # Create messages with images
+    messages = [{"role": "user", "content": [{"type": "text", "text": verification_prompt}]}]
+
+    for item in image_data_list:
+        messages[0]["content"].append({
+            "type": "text",
+            "text": f"\nSlide {item['slide']} - Original description: \"{item['original_description']}\""
+        })
+        messages[0]["content"].append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{item['base64']}"}
+        })
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+        )
+
+        verification_result = response.choices[0].message.content
+
+        # Parse and count issues
+        inaccurate_count = 0
+        issues = []
+
+        try:
+            import re
+            json_match = re.search(r'\[.*\]', verification_result, re.DOTALL)
+            if json_match:
+                verification_data = json.loads(json_match.group())
+                for item in verification_data:
+                    if not item.get("accurate", True):
+                        inaccurate_count += 1
+                        issue_text = f"Slide {item.get('slide')}: {item.get('issue', 'Inaccurate description')}"
+                        if item.get('corrected'):
+                            issue_text += f" → Corrected: {item.get('corrected')}"
+                        issues.append(issue_text)
+        except Exception as parse_err:
+            # Fallback counting
+            inaccurate_count = verification_result.lower().count('"accurate": false')
+
+        if log:
+            if inaccurate_count > 0:
+                log(f"⚠️ Stage 1: {inaccurate_count} INACCURATE image descriptions found!")
+                for issue in issues:
+                    log(f"  {issue}")
+            else:
+                log("✓ Stage 1: All image descriptions verified accurate")
+
+        # Store verification results
+        plan["_description_verification"] = {
+            "result": verification_result,
+            "inaccurate_count": inaccurate_count,
+            "issues": issues
+        }
+
+    except Exception as e:
+        if log:
+            log(f"⚠️ Stage 1 verification failed: {e}")
+
+    return plan
+
+
 def _validate_image_matches(plan: dict[str, Any], log=None) -> dict[str, Any]:
     """
-    Validate that image descriptions match slide content.
+    Stage 2: Validate that image descriptions match slide content.
     Uses AI to check if selected images actually align with text.
     Returns updated plan with validation notes.
     """
     if log:
-        log("🔍 Validating image-text matches...")
+        log("🔍 Stage 2: Validating image-text matches...")
 
     client = OpenAI()
 
@@ -1044,7 +1185,11 @@ def _build_config(
 
     plan = plan_slides(intent, uploads, allow_external=allow_external, log=log)
 
-    # Validate image-text matches
+    # Two-stage validation
+    # Stage 1: Verify image descriptions are accurate (catch misidentifications)
+    plan = _verify_image_descriptions(plan, uploads, log=log)
+
+    # Stage 2: Validate image-text matches
     plan = _validate_image_matches(plan, log=log)
 
     # Extract cover slide and content slides
