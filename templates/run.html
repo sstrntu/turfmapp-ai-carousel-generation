@@ -65,8 +65,8 @@
   <div class="editor-modal" id="editorModal" aria-hidden="true">
     <div class="editor-container">
       <div class="editor-header">
-        <h2>Edit Text</h2>
-        <p class="editor-hint">Click and drag text to move it. Double-click to edit content. Click Save to re-render.</p>
+        <h2>Adjust Text Position</h2>
+        <p class="editor-hint">Drag text to move. Drag corner handles or use +/- to resize (Shift for larger steps). Double-click to edit text.</p>
         <button class="editor-close" id="editorClose" type="button">✕</button>
       </div>
       <div class="editor-canvas-wrapper" id="editorCanvasWrapper">
@@ -98,6 +98,9 @@
 
     let currentImages = [];
     let currentIndex = 0;
+    let lastOutputsKey = "";
+    let lastLogsKey = "";
+    let pollTimer = null;
 
     function renderGrid(outputs) {
       gridEl.innerHTML = "";
@@ -181,42 +184,138 @@
     const editorSave = document.getElementById("editorSave");
     const editorCanvas = document.getElementById("editorCanvas");
     const editorOverlays = document.getElementById("editorOverlays");
+    const editorCanvasWrapper = document.getElementById("editorCanvasWrapper");
     const ctx = editorCanvas.getContext("2d");
 
     let currentSlideNum = 0;
     let textElements = [];
+    let editorScale = 1;
+    let editorScaleX = 1;
+    let editorScaleY = 1;
+    const slideWidth = 1080;
+    const slideHeight = 1350;
+    const slideAspect = slideWidth / slideHeight;
 
     editBtn.addEventListener("click", () => {
       currentSlideNum = currentIndex + 1;
       openEditor();
     });
 
-    function openEditor() {
+    async function openEditor() {
+      const config = await fetchSlideConfig(currentSlideNum);
+      const editorImageUrl = config?.editor_bg_url || config?.photo_url || currentImages[currentIndex];
+      const usePreCroppedEditorBg = !!config?.editor_bg_url;
+      const centering = Array.isArray(config?.centering) && config.centering.length === 2
+        ? config.centering
+        : [0.5, 0.35];
+
       const img = new Image();
       img.crossOrigin = "anonymous";
-      img.src = currentImages[currentIndex];
+      img.src = editorImageUrl;
       img.onload = () => {
-        // Set canvas size
-        const maxW = Math.min(window.innerWidth * 0.8, 1080);
-        const scale = maxW / img.width;
-        editorCanvas.width = img.width * scale;
-        editorCanvas.height = img.height * scale;
+        // Calculate scale to fit in viewport while maintaining aspect ratio
+        const maxW = Math.min(window.innerWidth * 0.75, 900);
+        const maxH = window.innerHeight * 0.65;
 
-        // Draw image
-        ctx.drawImage(img, 0, 0, editorCanvas.width, editorCanvas.height);
+        let displayW, displayH;
+        // Always keep editor canvas at generated slide ratio (1080x1350)
+        if (maxW / maxH > slideAspect) {
+          // Height constrained
+          displayH = maxH;
+          displayW = displayH * slideAspect;
+        } else {
+          // Width constrained
+          displayW = maxW;
+          displayH = displayW / slideAspect;
+        }
 
-        // Load text elements for this slide (we'll fetch from config)
-        fetchSlideConfig(currentSlideNum).then(config => {
+        // Use integer canvas dimensions to avoid mapping drift.
+        displayW = Math.round(displayW);
+        displayH = Math.round(displayH);
+
+        editorCanvas.width = displayW;
+        editorCanvas.height = displayH;
+        editorScaleX = editorCanvas.width / slideWidth;
+        editorScaleY = editorCanvas.height / slideHeight;
+        editorScale = (editorScaleX + editorScaleY) * 0.5;
+
+        // Draw image. Prefer server-side pre-cropped editor background for exact parity.
+        ctx.clearRect(0, 0, editorCanvas.width, editorCanvas.height);
+        if (usePreCroppedEditorBg) {
+          ctx.drawImage(img, 0, 0, editorCanvas.width, editorCanvas.height);
+        } else {
+          const sourceW = img.width;
+          const sourceH = img.height;
+          const sourceAspect = sourceW / sourceH;
+          let cropX = 0;
+          let cropY = 0;
+          let cropW = sourceW;
+          let cropH = sourceH;
+
+          const centerX = Math.max(0, Math.min(1, centering[0]));
+          const centerY = Math.max(0, Math.min(1, centering[1]));
+
+          if (sourceAspect > slideAspect) {
+            // Source is wider: crop left/right.
+            cropW = sourceH * slideAspect;
+            cropX = (sourceW - cropW) * centerX;
+            cropX = Math.max(0, Math.min(sourceW - cropW, cropX));
+          } else if (sourceAspect < slideAspect) {
+            // Source is taller: crop top/bottom.
+            cropH = sourceW / slideAspect;
+            cropY = (sourceH - cropH) * centerY;
+            cropY = Math.max(0, Math.min(sourceH - cropH, cropY));
+          }
+
+          ctx.drawImage(
+            img,
+            cropX,
+            cropY,
+            cropW,
+            cropH,
+            0,
+            0,
+            editorCanvas.width,
+            editorCanvas.height
+          );
+        }
+        editorOverlays.classList.add("raw-preview");
+
+        // Show modal first so we can get canvas position
+        editorModal.classList.add("open");
+        editorModal.setAttribute("aria-hidden", "false");
+
+        // Wait for layout, then position overlays
+        requestAnimationFrame(async () => {
+          updateOverlayPosition();
+          const overlayW = editorOverlays.clientWidth || editorCanvas.width;
+          const overlayH = editorOverlays.clientHeight || editorCanvas.height;
+          editorScaleX = overlayW / slideWidth;
+          editorScaleY = overlayH / slideHeight;
+          editorScale = (editorScaleX + editorScaleY) * 0.5;
+          await ensureEditorFontsLoaded();
           createDraggableElements(config);
-          editorModal.classList.add("open");
-          editorModal.setAttribute("aria-hidden", "false");
         });
       };
+
+      img.onerror = () => {
+        alert("Failed to load editable source image for this slide.");
+      };
+    }
+
+    function updateOverlayPosition() {
+      // Position overlay container to match canvas exactly in wrapper coordinates.
+      // Using offset/client sizes avoids viewport-rect rounding drift.
+      editorOverlays.style.top = `${editorCanvas.offsetTop}px`;
+      editorOverlays.style.left = `${editorCanvas.offsetLeft}px`;
+      editorOverlays.style.width = `${editorCanvas.clientWidth}px`;
+      editorOverlays.style.height = `${editorCanvas.clientHeight}px`;
     }
 
     function closeEditor() {
       editorModal.classList.remove("open");
       editorModal.setAttribute("aria-hidden", "true");
+      editorOverlays.classList.remove("raw-preview");
       editorOverlays.innerHTML = "";
       textElements = [];
     }
@@ -228,141 +327,411 @@
       return await res.json();
     }
 
+    async function ensureEditorFontsLoaded() {
+      if (!document.fonts || !document.fonts.load) return;
+      const titlePx = Math.max(24, Math.round(120 * editorScale));
+      const kickerPx = Math.max(14, Math.round(48 * editorScale));
+      const bodyPx = Math.max(14, Math.round(34 * editorScale));
+      await Promise.allSettled([
+        document.fonts.load(`700 ${titlePx}px "JLeagueKickTitle"`),
+        document.fonts.load(`700 ${kickerPx}px "JLeagueKickKicker"`),
+        document.fonts.load(`400 ${bodyPx}px "Helvetica Neue"`),
+      ]);
+    }
+
+    let selectedElement = null;
+
     function createDraggableElements(config) {
       if (!config) return;
 
-      // Create draggable overlays for each text element
-      const scale = editorCanvas.width / 1080;
-
       textElements = [];
       editorOverlays.innerHTML = "";
+      selectedElement = null;
+      const scales = config.scales || {};
 
       // Add kicker, title, body as draggable elements
+      // Position them based on centering values
       if (config.kicker) {
-        createDraggable("kicker", config.kicker, config.kicker_pos, scale);
+        createDraggable("kicker", config.kicker, config.kicker_pos, scales.kicker || 1);
       }
-      createDraggable("title", config.title, config.title_pos, scale);
+      createDraggable("title", config.title, config.title_pos, scales.title || 1);
       if (config.body) {
-        createDraggable("body", config.body, config.body_pos, scale);
+        createDraggable("body", config.body, config.body_pos, scales.body || 1);
       }
     }
 
-    function createDraggable(type, text, pos, scale) {
+    function applyTextScale(wrapper, textEl, type, scale) {
+      const clamped = Math.max(0.5, Math.min(3.0, scale));
+      wrapper.dataset.scale = String(clamped);
+      const baseSize = type === "title" ? 120 : (type === "kicker" ? 48 : 34);
+      const previewScale = editorScaleX || editorScale;
+      if (editorOverlays.classList.contains("raw-preview")) {
+        textEl.style.fontSize = `${baseSize * clamped * previewScale}px`;
+        textEl.style.width = `${(slideWidth - 120) * previewScale}px`; // 1080 - margins (60*2)
+        textEl.style.textAlign = "center";
+      } else {
+        const fallbackBase = type === "title" ? 24 : (type === "kicker" ? 14 : 16);
+        textEl.style.fontSize = `${fallbackBase * clamped}px`;
+      }
+    }
+
+    function createDraggable(type, text, pos, initialScale = 1) {
       const wrapper = document.createElement("div");
       wrapper.className = `draggable-text draggable-${type}`;
-      wrapper.style.left = (pos.x * scale) + "px";
-      wrapper.style.top = (pos.y * scale) + "px";
 
+      // Convert from original 1080x1350 coords to scaled coords
+      const scaledX = pos.x * editorScaleX;
+      const scaledY = pos.y * editorScaleY;
+
+      wrapper.style.left = scaledX + "px";
+      wrapper.style.top = scaledY + "px";
+      wrapper.style.transform = "translate(-50%, -50%)"; // Center on position
+
+      // Type label (shows on hover)
+      const typeLabel = document.createElement("div");
+      typeLabel.className = "type-label";
+      typeLabel.textContent = type;
+
+      // Text content
       const textEl = document.createElement("div");
       textEl.className = "text-content";
-      textEl.contentEditable = "true";
+      textEl.contentEditable = "false";
       textEl.textContent = text;
       textEl.dataset.originalText = text;
+      wrapper.dataset.originalScale = String(initialScale);
+      applyTextScale(wrapper, textEl, type, initialScale);
 
+      // Resize handles
+      const handles = ['nw', 'ne', 'sw', 'se'].map(corner => {
+        const handle = document.createElement("div");
+        handle.className = `resize-handle ${corner}`;
+        handle.dataset.corner = corner;
+        return handle;
+      });
+
+      wrapper.appendChild(typeLabel);
       wrapper.appendChild(textEl);
+      handles.forEach(h => wrapper.appendChild(h));
 
       let isDragging = false;
+      let isResizing = false;
       let isEditing = false;
       let startX, startY, initialX, initialY;
+      let resizeCorner = "se";
+      let startScale = initialScale;
+      let resizeAnchorX = 0;
+      let resizeAnchorY = 0;
 
-      // Make text draggable by default, editable on double-click
+      function anchorFromCorner(corner, cx, cy, w, h) {
+        switch (corner) {
+          case "se":
+            return { x: cx - w / 2, y: cy - h / 2 }; // keep NW fixed
+          case "ne":
+            return { x: cx - w / 2, y: cy + h / 2 }; // keep SW fixed
+          case "sw":
+            return { x: cx + w / 2, y: cy - h / 2 }; // keep NE fixed
+          case "nw":
+            return { x: cx + w / 2, y: cy + h / 2 }; // keep SE fixed
+          default:
+            return { x: cx - w / 2, y: cy - h / 2 };
+        }
+      }
+
+      function centerFromAnchor(corner, anchorX, anchorY, w, h) {
+        switch (corner) {
+          case "se":
+            return { x: anchorX + w / 2, y: anchorY + h / 2 };
+          case "ne":
+            return { x: anchorX + w / 2, y: anchorY - h / 2 };
+          case "sw":
+            return { x: anchorX - w / 2, y: anchorY + h / 2 };
+          case "nw":
+            return { x: anchorX - w / 2, y: anchorY - h / 2 };
+          default:
+            return { x: anchorX + w / 2, y: anchorY + h / 2 };
+        }
+      }
+
+      handles.forEach(handle => {
+        handle.addEventListener("mousedown", (e) => {
+          if (isEditing) return;
+          e.preventDefault();
+          e.stopPropagation();
+          selectElement(wrapper);
+          isResizing = true;
+          resizeCorner = handle.dataset.corner || "se";
+          startX = e.clientX;
+          startY = e.clientY;
+          startScale = parseFloat(wrapper.dataset.scale || "1");
+          const cx = parseFloat(wrapper.style.left);
+          const cy = parseFloat(wrapper.style.top);
+          const w = wrapper.offsetWidth;
+          const h = wrapper.offsetHeight;
+          const anchor = anchorFromCorner(resizeCorner, cx, cy, w, h);
+          resizeAnchorX = anchor.x;
+          resizeAnchorY = anchor.y;
+          wrapper.classList.add("dragging");
+          document.body.style.userSelect = "none";
+          document.body.style.cursor = "nwse-resize";
+        });
+      });
+
+      // Click to select, then drag
       wrapper.addEventListener("mousedown", (e) => {
-        if (isEditing) return; // Don't drag while editing
+        if (isEditing) return;
+        if (e.target.classList.contains("resize-handle")) return;
 
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Select this element
+        selectElement(wrapper);
+
+        // Start dragging
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
-        initialX = wrapper.offsetLeft;
-        initialY = wrapper.offsetTop;
-        wrapper.classList.add("dragging");
 
-        // Disable editing while dragging
-        textEl.contentEditable = "false";
-        e.preventDefault();
+        const rect = wrapper.getBoundingClientRect();
+        const overlayRect = editorOverlays.getBoundingClientRect();
+        initialX = rect.left + rect.width/2 - overlayRect.left;
+        initialY = rect.top + rect.height/2 - overlayRect.top;
+
+        wrapper.classList.add("dragging");
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "grabbing";
       });
 
       const onMouseMove = (e) => {
+        if (isResizing) {
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          const dirX = resizeCorner.includes("e") ? 1 : -1;
+          const dirY = resizeCorner.includes("s") ? 1 : -1;
+          const delta = (dx * dirX + dy * dirY) / 260;
+          applyTextScale(wrapper, textEl, type, startScale * (1 + delta));
+          const newW = wrapper.offsetWidth;
+          const newH = wrapper.offsetHeight;
+          const center = centerFromAnchor(resizeCorner, resizeAnchorX, resizeAnchorY, newW, newH);
+          wrapper.style.left = `${center.x}px`;
+          wrapper.style.top = `${center.y}px`;
+          return;
+        }
         if (!isDragging) return;
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
+
         wrapper.style.left = (initialX + dx) + "px";
         wrapper.style.top = (initialY + dy) + "px";
       };
 
-      document.addEventListener("mousemove", onMouseMove);
-
-      document.addEventListener("mouseup", () => {
+      const onMouseUp = () => {
+        if (isResizing) {
+          wrapper.classList.remove("dragging");
+          isResizing = false;
+          document.body.style.userSelect = "";
+          document.body.style.cursor = "";
+          return;
+        }
         if (isDragging) {
           wrapper.classList.remove("dragging");
           isDragging = false;
-          // Re-enable editing after drag
-          textEl.contentEditable = "true";
+          document.body.style.userSelect = "";
+          document.body.style.cursor = "";
         }
-      });
+      };
 
-      // Double-click to enter edit mode
-      textEl.addEventListener("dblclick", (e) => {
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+
+      // Double-click to edit text
+      wrapper.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
         isEditing = true;
+        wrapper.classList.add("editing");
+        textEl.contentEditable = "true";
         textEl.focus();
-        // Select all text for easy editing
+
+        // Select all text
         const range = document.createRange();
         range.selectNodeContents(textEl);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
-        e.stopPropagation();
       });
 
       // Exit edit mode on blur
       textEl.addEventListener("blur", () => {
         isEditing = false;
+        wrapper.classList.remove("editing");
+        textEl.contentEditable = "false";
+      });
+
+      // Handle Enter key to exit editing
+      textEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          textEl.blur();
+        }
+        if (e.key === "Escape") {
+          textEl.textContent = textEl.dataset.originalText;
+          textEl.blur();
+        }
       });
 
       editorOverlays.appendChild(wrapper);
-      textElements.push({ type, element: wrapper, textElement: textEl, scale });
+      textElements.push({ type, element: wrapper, textElement: textEl });
     }
+
+    function getRecordForElement(wrapper) {
+      return textElements.find(te => te.element === wrapper) || null;
+    }
+
+    function selectElement(wrapper) {
+      // Deselect previous
+      if (selectedElement && selectedElement !== wrapper) {
+        selectedElement.classList.remove("selected");
+      }
+      // Select new
+      wrapper.classList.add("selected");
+      selectedElement = wrapper;
+    }
+
+    // Click on canvas (not on element) to deselect
+    editorCanvas.addEventListener("click", () => {
+      if (selectedElement) {
+        selectedElement.classList.remove("selected");
+        selectedElement = null;
+      }
+    });
+
+    // Keyboard controls for selected element
+    document.addEventListener("keydown", (e) => {
+      if (!editorModal.classList.contains("open")) return;
+      if (!selectedElement) return;
+
+      // Don't handle keys if editing text
+      const isEditing = selectedElement.classList.contains("editing");
+      if (isEditing) return;
+
+      const nudgeAmount = e.shiftKey ? 10 : 1; // Shift for larger nudge
+
+      switch(e.key) {
+        case "ArrowUp":
+          e.preventDefault();
+          selectedElement.style.top = (parseFloat(selectedElement.style.top) - nudgeAmount) + "px";
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          selectedElement.style.top = (parseFloat(selectedElement.style.top) + nudgeAmount) + "px";
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          selectedElement.style.left = (parseFloat(selectedElement.style.left) - nudgeAmount) + "px";
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          selectedElement.style.left = (parseFloat(selectedElement.style.left) + nudgeAmount) + "px";
+          break;
+        case "+":
+        case "=":
+          e.preventDefault();
+          {
+            const record = getRecordForElement(selectedElement);
+            if (record) {
+              const cur = parseFloat(selectedElement.dataset.scale || "1");
+              applyTextScale(selectedElement, record.textElement, record.type, cur * (e.shiftKey ? 1.2 : 1.08));
+            }
+          }
+          break;
+        case "-":
+        case "_":
+          e.preventDefault();
+          {
+            const record = getRecordForElement(selectedElement);
+            if (record) {
+              const cur = parseFloat(selectedElement.dataset.scale || "1");
+              applyTextScale(selectedElement, record.textElement, record.type, cur / (e.shiftKey ? 1.2 : 1.08));
+            }
+          }
+          break;
+        case "Escape":
+          selectedElement.classList.remove("selected");
+          selectedElement = null;
+          break;
+      }
+    });
 
     editorClose.addEventListener("click", closeEditor);
     editorCancel.addEventListener("click", closeEditor);
 
+    // Handle window resize
+    window.addEventListener("resize", () => {
+      if (editorModal.classList.contains("open")) {
+        updateOverlayPosition();
+      }
+    });
+
     editorSave.addEventListener("click", async () => {
-      // Collect new positions
-      const positions = textElements.map(te => ({
-        type: te.type,
-        x: parseInt(te.element.style.left) / te.scale,
-        y: parseInt(te.element.style.top) / te.scale
-      }));
+      editorSave.disabled = true;
+      editorSave.textContent = "Saving...";
+
+      // Collect new positions - convert back to original 1080x1350 coords
+      const positions = textElements.map(te => {
+        const left = parseFloat(te.element.style.left);
+        const top = parseFloat(te.element.style.top);
+
+        return {
+          type: te.type,
+          x: left / editorScaleX,
+          y: top / editorScaleY
+        };
+      });
 
       // Collect text updates
       const textUpdates = {};
+      const sizeUpdates = {};
       textElements.forEach(te => {
         const newText = te.textElement.textContent.trim();
         const originalText = te.textElement.dataset.originalText;
         if (newText !== originalText) {
           textUpdates[te.type] = newText;
         }
+        const currentScale = parseFloat(te.element.dataset.scale || "1");
+        const originalScale = parseFloat(te.element.dataset.originalScale || "1");
+        if (Math.abs(currentScale - originalScale) > 0.01) {
+          sizeUpdates[te.type] = currentScale;
+        }
       });
 
-      // Send to server to re-render
-      const res = await fetch(`/api/update-slide/${runId}/${currentSlideNum}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          positions,
-          text_updates: Object.keys(textUpdates).length > 0 ? textUpdates : null
-        })
-      });
+      try {
+        // Send to server to re-render
+        const res = await fetch(`/api/update-slide/${runId}/${currentSlideNum}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            positions,
+            text_updates: Object.keys(textUpdates).length > 0 ? textUpdates : null,
+            size_updates: Object.keys(sizeUpdates).length > 0 ? sizeUpdates : null
+          })
+        });
 
-      if (res.ok) {
-        closeEditor();
-        // Refresh the image
-        currentImages[currentIndex] = currentImages[currentIndex] + "?t=" + Date.now();
-        lightboxImg.src = currentImages[currentIndex];
-        alert("Slide re-rendered! Refreshing...");
-        location.reload();
-      } else {
-        const error = await res.text();
-        alert("Failed to save changes: " + error);
+        if (res.ok) {
+          closeEditor();
+          closeLightbox();
+          // Refresh images
+          location.reload();
+        } else {
+          const error = await res.json();
+          alert("Failed to save changes: " + (error.detail || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Failed to save changes: " + err.message);
+      } finally {
+        editorSave.disabled = false;
+        editorSave.textContent = "Save & Re-render";
       }
     });
 
@@ -371,12 +740,17 @@
       if (!res.ok) return;
       const data = await res.json();
       statusEl.textContent = `Status: ${data.status}`;
-      logEl.innerHTML = "";
-      data.logs.forEach((line) => {
-        const li = document.createElement("li");
-        li.textContent = line;
-        logEl.appendChild(li);
-      });
+      const logs = data.logs || [];
+      const logsKey = logs.join("\n");
+      if (logsKey !== lastLogsKey) {
+        lastLogsKey = logsKey;
+        logEl.innerHTML = "";
+        logs.forEach((line) => {
+          const li = document.createElement("li");
+          li.textContent = line;
+          logEl.appendChild(li);
+        });
+      }
 
       // Redirect to preview page if awaiting approval
       if (data.status === "awaiting_approval") {
@@ -388,22 +762,37 @@
         spinner.style.display = "none";
         resultsEl.style.display = "block";
         downloadLink.href = data.download_url;
-        renderGrid(data.outputs || []);
+        const outputs = data.outputs || [];
+        const outputsKey = outputs.join("|");
+        if (outputsKey !== lastOutputsKey) {
+          lastOutputsKey = outputsKey;
+          renderGrid(outputs);
+        }
 
         // Enable edit button
         const editBtn = document.getElementById("editAgainBtn");
         if (editBtn) {
           editBtn.href = `/run/${runId}/preview`;
         }
+
+        // Stop polling once final outputs are rendered to prevent visual flicker.
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
       }
 
       if (data.status === "error") {
         spinner.style.display = "none";
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
       }
     }
 
     poll();
-    setInterval(poll, 2000);
+    pollTimer = setInterval(poll, 2000);
   </script>
 </body>
 </html>

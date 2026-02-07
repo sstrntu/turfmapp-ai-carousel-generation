@@ -615,8 +615,16 @@ def plan_slides(intent: str, image_paths: list[str], allow_external: bool, log=N
         "\n❌ Title: 'The Journey Continues' (no data)"
         "\n❌ Body: 'The team's success was remarkable' (no specifics)"
         "\n\nWhen research data is provided, EVERY slide must reference specific facts from it."
-        "\n\nUse uploaded images when possible."
-        " If a required scene is missing and external search is allowed, request it."
+        "\n\n🌐 EXTERNAL IMAGE SEARCH IS AVAILABLE!"
+        "\nUploaded images are PREFERRED but NOT required. You can request external images when:"
+        "\n• No uploaded image matches a key fact (e.g., mascot slide but no mascot photo)"
+        "\n• The topic requires a specific visual (e.g., logo/crest changes, historical photos)"
+        "\n• A better image would make the story clearer"
+        "\n\nTo use external search, set:"
+        "\n  \"source\": \"external\","
+        "\n  \"query\": \"descriptive search terms (e.g., 'V-Varen Nagasaki mascot Vivi-kun')\" "
+        "\n\nDon't force poor matches! If you have a slide about the club mascot but only crowd photos,"
+        "\nuse external search to find an actual mascot image."
         f"{placement_prompt}"
         "\n\nCRITICAL: ALL text content (titles, subtitles, kickers, body text) MUST be in English only."
         " Do NOT use any other language - output English text only for all slide content."
@@ -873,6 +881,39 @@ def _copy_uploads(uploads: list[str], photos_dir: Path) -> list[str]:
     return names
 
 
+def _validate_downloaded_image(path: Path, min_size: int = 800, log=None) -> bool:
+    """Validate a downloaded image for integrity and minimum dimensions.
+
+    Args:
+        path: Path to the downloaded image
+        min_size: Minimum width and height in pixels (default 800)
+        log: Optional logging function
+
+    Returns:
+        True if image is valid, False otherwise
+    """
+    from PIL import Image
+
+    try:
+        # First check file integrity
+        with Image.open(path) as img:
+            img.verify()  # Verify file integrity
+
+        # Re-open to check dimensions (verify() closes the file)
+        with Image.open(path) as img:
+            width, height = img.size
+            if width < min_size or height < min_size:
+                if log:
+                    log(f"  ⚠️ Image too small: {width}x{height} (min {min_size}x{min_size})")
+                return False
+
+        return True
+    except Exception as e:
+        if log:
+            log(f"  ⚠️ Image validation failed: {e}")
+        return False
+
+
 def _fetch_external_images(slides: list[dict[str, Any]], photos_dir: Path, log=None) -> dict[int, str]:
     replacements: dict[int, str] = {}
     for idx, s in enumerate(slides):
@@ -888,16 +929,34 @@ def _fetch_external_images(slides: list[dict[str, Any]], photos_dir: Path, log=N
         urls = search_images(query, allowed_domains=None)
         if not urls:
             continue
-        url = urls[0]
-        if log:
-            log(f"Downloading image: {url}")
-        ext = os.path.splitext(url)[-1]
-        if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-            ext = ".jpg"
-        filename = f"external_{idx+1}{ext}"
-        out_path = photos_dir / filename
-        if download_image(url, str(out_path)):
-            replacements[idx] = filename
+
+        # Try up to 3 URLs to find a valid image
+        max_attempts = min(3, len(urls))
+        for attempt, url in enumerate(urls[:max_attempts]):
+            if log:
+                log(f"Downloading image ({attempt + 1}/{max_attempts}): {url}")
+            ext = os.path.splitext(url)[-1]
+            if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                ext = ".jpg"
+            filename = f"external_{idx+1}{ext}"
+            out_path = photos_dir / filename
+
+            if download_image(url, str(out_path)):
+                # Validate the downloaded image
+                if _validate_downloaded_image(out_path, min_size=800, log=log):
+                    replacements[idx] = filename
+                    break
+                else:
+                    # Delete invalid image and try next URL
+                    try:
+                        out_path.unlink()
+                    except Exception:
+                        pass
+                    if log and attempt < max_attempts - 1:
+                        log(f"  → Trying next URL...")
+            else:
+                if log and attempt < max_attempts - 1:
+                    log(f"  → Download failed, trying next URL...")
     return replacements
 
 
@@ -996,7 +1055,7 @@ def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=Non
             result_text = response.choices[0].message.content
             all_results.append(f"Slide {item['slide']}: {result_text}")
 
-            # Parse result
+            # Parse result and APPLY CORRECTIONS
             try:
                 import re
                 json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
@@ -1004,9 +1063,24 @@ def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=Non
                     result_data = json.loads(json_match.group())
                     if not result_data.get("accurate", True):
                         inaccurate_count += 1
+                        corrected_desc = result_data.get('corrected', '')
                         issue_text = f"Slide {item['slide']}: {result_data.get('issue', 'Inaccurate')}"
-                        if result_data.get('corrected'):
-                            issue_text += f" → {result_data.get('corrected')}"
+                        if corrected_desc:
+                            issue_text += f" → {corrected_desc}"
+                            # ACTUALLY FIX the description in the plan
+                            slide_key = item['slide']
+                            if slide_key == "Cover":
+                                if plan.get("cover_slide", {}).get("image"):
+                                    plan["cover_slide"]["image"]["description"] = corrected_desc
+                                    if log:
+                                        log(f"  ✓ Fixed Cover slide description")
+                            else:
+                                slide_idx = int(slide_key) - 1
+                                if 0 <= slide_idx < len(plan.get("slides", [])):
+                                    if plan["slides"][slide_idx].get("image"):
+                                        plan["slides"][slide_idx]["image"]["description"] = corrected_desc
+                                        if log:
+                                            log(f"  ✓ Fixed Slide {slide_key} description")
                         issues.append(issue_text)
             except:
                 pass
@@ -1019,9 +1093,7 @@ def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=Non
 
     if log:
         if inaccurate_count > 0:
-            log(f"⚠️ Stage 1: {inaccurate_count} INACCURATE image descriptions found!")
-            for issue in issues:
-                log(f"  {issue}")
+            log(f"⚠️ Stage 1: {inaccurate_count} descriptions corrected")
         else:
             log("✓ Stage 1: All image descriptions verified accurate")
 
@@ -1035,18 +1107,27 @@ def _verify_image_descriptions(plan: dict[str, Any], uploads: list[str], log=Non
     return plan
 
 
-def _validate_image_matches(plan: dict[str, Any], log=None) -> dict[str, Any]:
+def _validate_image_matches(plan: dict[str, Any], uploads: list[str] = None, photos_dir: Path = None, log=None) -> dict[str, Any]:
     """
-    Stage 2: Validate that image descriptions match slide content.
-    Uses AI to check if selected images actually align with text.
+    Stage 2: Validate that image descriptions match slide content WITH ACTUAL IMAGES.
+    Uses AI to check if selected images actually align with text by examining real pixels.
     Returns updated plan with validation notes.
+
+    Args:
+        plan: The slide plan with image assignments
+        uploads: List of original upload paths (for finding images)
+        photos_dir: Directory where photos are stored (for finding images)
+        log: Optional logging function
     """
     if log:
-        log("🔍 Stage 2: Validating image-text matches...")
+        if uploads or photos_dir:
+            log("🔍 Stage 2: Validating image-text matches with actual images...")
+        else:
+            log("🔍 Stage 2: Validating image-text matches (descriptions only)...")
 
     client = OpenAI()
 
-    # Build validation prompt
+    # Build list of slides to validate
     slides_to_validate = []
 
     # Check cover slide
@@ -1059,6 +1140,7 @@ def _validate_image_matches(plan: dict[str, Any], log=None) -> dict[str, Any]:
             "body": cover.get("subtitle", ""),
             "image_description": img.get("description", ""),
             "image_reasoning": img.get("reasoning", ""),
+            "filename": img.get("filename", ""),
         })
 
     # Check content slides
@@ -1071,89 +1153,187 @@ def _validate_image_matches(plan: dict[str, Any], log=None) -> dict[str, Any]:
             "body": slide.get("body", ""),
             "image_description": img.get("description", ""),
             "image_reasoning": img.get("reasoning", ""),
+            "filename": img.get("filename", ""),
         })
 
-    validation_prompt = (
-        "You are a STRICT validator checking image-text matches for an Instagram carousel.\n\n"
-        "For each slide, check if the IMAGE DESCRIPTION actually shows what the TEXT is about.\n\n"
-        "STRICT Validation rules:\n"
-        "✓ GOOD: Description clearly shows the exact subject (e.g., text about manager → description shows manager)\n"
-        "✓ CONTEXTUAL: Description shows related scene that fans would understand (e.g., player at stadium for stadium topic)\n"
-        "⚠️ WEAK: Description is too vague or generic to verify the match\n"
-        "❌ BAD: Description shows WRONG subject (e.g., text about manager → description shows only crowd/fans)\n\n"
-        "BE STRICT:\n"
-        "- If text is about a PERSON but description doesn't show that person → BAD\n"
-        "- If description says 'no individual subjects visible' but text is about specific person → BAD\n"
-        "- If description shows 'team lineup' but text is about specific action/moment → WEAK\n\n"
-        "Respond with ONLY JSON array, one object per slide:\n"
-        '[{"slide": "number", "status": "good|contextual|weak|bad", "issue": "explanation if weak/bad"}]\n\n'
-        "Slides to validate:\n"
-    )
+    # Process ONE slide at a time to avoid payload limits when using actual images
+    all_results = []
+    weak_count = 0
+    bad_count = 0
+    issues = []
 
     for slide_data in slides_to_validate:
+        # Try to find and encode the actual image
+        image_b64 = None
+        filename = slide_data.get("filename", "")
+
+        if filename and (uploads or photos_dir):
+            image_path = None
+
+            # Try to find in uploads
+            if uploads:
+                for upload_path in uploads:
+                    if Path(upload_path).name == filename:
+                        image_path = upload_path
+                        break
+
+            # Try to find in photos_dir
+            if not image_path and photos_dir:
+                potential_path = photos_dir / filename
+                if potential_path.exists():
+                    image_path = str(potential_path)
+
+            # Encode the image if found
+            if image_path and os.path.exists(image_path):
+                try:
+                    mime, b64 = _encode_image_b64(image_path, max_size=512)  # Smaller for validation
+                    image_b64 = f"data:{mime};base64,{b64}"
+                except Exception as e:
+                    if log:
+                        log(f"  ⚠️ Failed to encode image for slide {slide_data['slide_num']}: {e}")
+
+        # Build validation prompt for this slide
+        validation_prompt = (
+            "You are a STRICT validator checking if an image matches the slide text for an Instagram carousel.\n\n"
+        )
+
+        if image_b64:
+            validation_prompt += (
+                "I'm providing you with the ACTUAL IMAGE. Look at it carefully and verify:\n"
+                "1. Does the image description accurately describe what's in the image?\n"
+                "2. Does the image content match what the slide text is about?\n\n"
+            )
+        else:
+            validation_prompt += (
+                "Based on the image description provided, verify if the image matches the slide text.\n\n"
+            )
+
         validation_prompt += (
-            f"\nSlide {slide_data['slide_num']}:\n"
+            "Validation rules:\n"
+            "✓ GOOD: Image clearly shows the subject mentioned in text\n"
+            "✓ CONTEXTUAL: Image shows related scene that MAKES SENSE for the topic. Examples:\n"
+            "   - Man in suit/business attire + ownership/business story → CONTEXTUAL (good match)\n"
+            "   - Executive/manager celebrating + company takeover story → CONTEXTUAL (good match)\n"
+            "   - Crowd celebrating + team success story → CONTEXTUAL (good match)\n"
+            "   - Stadium/venue shot + stadium facts → CONTEXTUAL (good match)\n"
+            "⚠️ WEAK: Image is too generic OR you cannot verify the connection (e.g., random crowd for a specific person's story)\n"
+            "❌ BAD: Image clearly CONTRADICTS the text (e.g., defeat image for victory story, wrong team/venue)\n\n"
+            "BE REASONABLE - think like a fan:\n"
+            "- Man in suit at stadium + ownership story → CONTEXTUAL (business figure fits the narrative)\n"
+            "- Crowd shot + fan/atmosphere story → GOOD\n"
+            "- Player action shot + match result story → CONTEXTUAL\n"
+            "- Generic crowd + specific person's biography → WEAK (no clear connection)\n"
+            "- Image of Team A + story about Team B → BAD (contradiction)\n\n"
+            f"Slide {slide_data['slide_num']}:\n"
             f"  Title: {slide_data['title']}\n"
             f"  Body: {slide_data['body']}\n"
             f"  Image description: {slide_data['image_description']}\n"
-            f"  AI reasoning: {slide_data['image_reasoning']}\n"
+            f"  AI reasoning: {slide_data['image_reasoning']}\n\n"
+            "Respond with ONLY JSON:\n"
+            '{"status": "good|contextual|weak|bad", "issue": "explanation if weak/bad"}\n'
         )
-
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": validation_prompt}],
-        )
-
-        validation_result = response.choices[0].message.content
-
-        # Parse JSON and count issues
-        weak_count = 0
-        bad_count = 0
-        issues = []
 
         try:
-            # Try to extract JSON from response
-            import re
-            json_match = re.search(r'\[.*\]', validation_result, re.DOTALL)
-            if json_match:
-                validation_data = json.loads(json_match.group())
-                for item in validation_data:
-                    status = item.get("status", "").lower()
+            # Build message content
+            content = []
+            content.append({"type": "text", "text": validation_prompt})
+
+            if image_b64:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": image_b64}
+                })
+
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": content}],
+            )
+
+            result_text = response.choices[0].message.content
+            all_results.append(f"Slide {slide_data['slide_num']}: {result_text}")
+
+            # Parse result
+            try:
+                import re
+                json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+                if json_match:
+                    result_data = json.loads(json_match.group())
+                    status = result_data.get("status", "").lower()
+                    issue_text = result_data.get("issue", "")
                     if status == "weak":
                         weak_count += 1
-                        issues.append(f"Slide {item.get('slide')}: WEAK - {item.get('issue', '')}")
+                        issues.append({
+                            "slide_num": slide_data['slide_num'],
+                            "status": "WEAK",
+                            "issue": issue_text,
+                            "title": slide_data['title'],
+                            "body": slide_data.get('body', ''),
+                        })
                     elif status == "bad":
                         bad_count += 1
-                        issues.append(f"Slide {item.get('slide')}: BAD - {item.get('issue', '')}")
-        except Exception as parse_err:
-            # Fallback to simple counting
-            weak_count = validation_result.lower().count('"status": "weak"')
-            bad_count = validation_result.lower().count('"status": "bad"')
+                        issues.append({
+                            "slide_num": slide_data['slide_num'],
+                            "status": "BAD",
+                            "issue": issue_text,
+                            "title": slide_data['title'],
+                            "body": slide_data.get('body', ''),
+                        })
+            except Exception:
+                pass
 
+        except Exception as e:
+            if log:
+                log(f"  ⚠️ Failed to validate slide {slide_data['slide_num']}: {e}")
+
+    validation_result = "\n".join(all_results)
+
+    if log:
+        if bad_count > 0:
+            log(f"⚠️ Validation: {bad_count} BAD image-text matches found")
+            for issue in [i for i in issues if i.get("status") == "BAD"]:
+                log(f"  Slide {issue['slide_num']}: BAD - {issue['issue']}")
+        elif weak_count > 0:
+            log(f"⚠️ Validation: {weak_count} WEAK image-text matches found")
+            for issue in [i for i in issues if i.get("status") == "WEAK"]:
+                log(f"  Slide {issue['slide_num']}: WEAK - {issue['issue']}")
+        else:
+            log("✓ Validation: All image-text matches look good")
+
+    # Store validation in plan metadata
+    plan["_validation"] = {
+        "result": validation_result,
+        "weak_count": weak_count,
+        "bad_count": bad_count,
+        "issues": issues
+    }
+
+    # Flag slides with BAD matches for external image search
+    # This will trigger searching for better matching images
+    bad_slides_for_search = []
+    bad_slide_nums = set()
+
+    for issue in issues:
+        if issue.get("status") == "BAD":
+            slide_num = issue['slide_num']
+            bad_slide_nums.add(str(slide_num))
+
+            # Build search query from slide content
+            title = issue.get('title', '')
+            body = issue.get('body', '')
+            search_query = f"{title} {body}".strip()[:100]  # Limit query length
+
+            bad_slides_for_search.append({
+                "slide_num": slide_num,
+                "search_query": search_query,
+                "issue": issue['issue'],
+            })
+
+    if bad_slides_for_search:
+        # Mark these slides for external image search
+        plan["_needs_external_images"] = bad_slides_for_search
+        plan["_conservative_layout_slides"] = list(bad_slide_nums)
         if log:
-            if bad_count > 0:
-                log(f"⚠️ Validation: {bad_count} BAD image-text matches found")
-                for issue in [i for i in issues if "BAD" in i]:
-                    log(f"  {issue}")
-            elif weak_count > 0:
-                log(f"⚠️ Validation: {weak_count} WEAK image-text matches found")
-                for issue in [i for i in issues if "WEAK" in i]:
-                    log(f"  {issue}")
-            else:
-                log("✓ Validation: All image-text matches look good")
-
-        # Store validation in plan metadata
-        plan["_validation"] = {
-            "result": validation_result,
-            "weak_count": weak_count,
-            "bad_count": bad_count,
-            "issues": issues
-        }
-
-    except Exception as e:
-        if log:
-            log(f"⚠️ Validation failed: {e}")
+            log(f"  → Flagged {len(bad_slides_for_search)} slides for external image search")
 
     return plan
 
@@ -1182,8 +1362,8 @@ def _build_config(
     # Stage 1: Verify image descriptions are accurate (catch misidentifications)
     plan = _verify_image_descriptions(plan, uploads, log=log)
 
-    # Stage 2: Validate image-text matches
-    plan = _validate_image_matches(plan, log=log)
+    # Stage 2: Validate image-text matches with actual images
+    plan = _validate_image_matches(plan, uploads=uploads, photos_dir=photos_dir, log=log)
 
     # Extract cover slide and content slides
     cover_slide_in = plan.get("cover_slide")
@@ -1192,6 +1372,13 @@ def _build_config(
     # Fetch external images for both cover and content slides
     external_map: dict[int, str] = {}
     cover_external_filename = None
+
+    # Check if there are BAD matches that need replacement
+    needs_external = plan.get("_needs_external_images", [])
+    if needs_external and not allow_external:
+        if log:
+            log(f"⚠️ {len(needs_external)} slides have BAD image-text matches but external search is disabled")
+            log(f"   Enable external search to automatically fix these mismatches")
 
     if allow_external:
         # Fetch cover slide image if needed
@@ -1204,19 +1391,100 @@ def _build_config(
                         log(f"Searching cover image: {query}")
                     urls = search_images(query, allowed_domains=None)
                     if urls:
-                        url = urls[0]
-                        if log:
-                            log(f"Downloading cover image: {url}")
-                        ext = os.path.splitext(url)[-1]
-                        if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-                            ext = ".jpg"
-                        filename = f"cover_image{ext}"
-                        out_path = photos_dir / filename
-                        if download_image(url, str(out_path)):
-                            cover_external_filename = filename
+                        # Try up to 3 URLs to find a valid image
+                        max_attempts = min(3, len(urls))
+                        for attempt, url in enumerate(urls[:max_attempts]):
+                            if log:
+                                log(f"Downloading cover image ({attempt + 1}/{max_attempts}): {url}")
+                            ext = os.path.splitext(url)[-1]
+                            if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                                ext = ".jpg"
+                            filename = f"cover_image{ext}"
+                            out_path = photos_dir / filename
+                            if download_image(url, str(out_path)):
+                                # Validate the downloaded image
+                                if _validate_downloaded_image(out_path, min_size=800, log=log):
+                                    cover_external_filename = filename
+                                    break
+                                else:
+                                    # Delete invalid image and try next URL
+                                    try:
+                                        out_path.unlink()
+                                    except Exception:
+                                        pass
+                                    if log and attempt < max_attempts - 1:
+                                        log(f"  → Trying next URL...")
+                            else:
+                                if log and attempt < max_attempts - 1:
+                                    log(f"  → Download failed, trying next URL...")
 
         # Fetch content slides images
         external_map = _fetch_external_images(slides_in, photos_dir, log=log)
+
+        # Fetch REPLACEMENT images for slides with BAD image-text matches
+        needs_external = plan.get("_needs_external_images", [])
+        replacement_map: dict[int, str] = {}
+
+        if needs_external:
+            if log:
+                log(f"🔄 Fetching replacement images for {len(needs_external)} BAD matches...")
+
+            for item in needs_external:
+                slide_num = item["slide_num"]
+                search_query = item["search_query"]
+
+                # For content slides, slide_num is 1-indexed in validation
+                # but 0-indexed in slides_in array
+                if slide_num == "Cover":
+                    # Handle cover slide replacement
+                    if log:
+                        log(f"  → Searching replacement for Cover: {search_query}")
+                    urls = search_images(search_query, allowed_domains=None)
+                    if urls:
+                        for attempt, url in enumerate(urls[:3]):
+                            ext = os.path.splitext(url)[-1]
+                            if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                                ext = ".jpg"
+                            filename = f"cover_replacement{ext}"
+                            out_path = photos_dir / filename
+                            if download_image(url, str(out_path)):
+                                if _validate_downloaded_image(out_path, min_size=800, log=log):
+                                    cover_external_filename = filename
+                                    if log:
+                                        log(f"    ✓ Found replacement for Cover")
+                                    break
+                                else:
+                                    try:
+                                        out_path.unlink()
+                                    except Exception:
+                                        pass
+                else:
+                    # Handle content slide replacement
+                    slide_idx = int(slide_num) - 1  # Convert to 0-indexed
+                    if log:
+                        log(f"  → Searching replacement for Slide {slide_num}: {search_query}")
+                    urls = search_images(search_query, allowed_domains=None)
+                    if urls:
+                        for attempt, url in enumerate(urls[:3]):
+                            ext = os.path.splitext(url)[-1]
+                            if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                                ext = ".jpg"
+                            filename = f"replacement_{slide_num}{ext}"
+                            out_path = photos_dir / filename
+                            if download_image(url, str(out_path)):
+                                if _validate_downloaded_image(out_path, min_size=800, log=log):
+                                    replacement_map[slide_idx] = filename
+                                    if log:
+                                        log(f"    ✓ Found replacement for Slide {slide_num}")
+                                    break
+                                else:
+                                    try:
+                                        out_path.unlink()
+                                    except Exception:
+                                        pass
+
+        # Merge replacement_map into external_map (replacements override)
+        external_map.update(replacement_map)
 
         # Analyze newly downloaded external images
         new_images = []
@@ -1235,6 +1503,9 @@ def _build_config(
     slides: list[dict[str, Any]] = []
     overrides: dict[int, list[str]] = {}
 
+    # Get conservative layout flags from validation
+    conservative_slides = set(plan.get("_conservative_layout_slides", []))
+
     # Process cover slide first (becomes slide 1)
     if cover_slide_in:
         img = cover_slide_in.get("image") or {}
@@ -1252,10 +1523,10 @@ def _build_config(
 
         # Use intelligent placement based on image analysis
         centering = cover_slide_in.get("centering")
-        split_layout = False
+        subject_region = None
         if filename and filename in placement_map:
             metadata = placement_map[filename]
-            split_layout = metadata.get('split_text', False)
+            subject_region = metadata.get('subject_region')
             if not centering:
                 centering = list(metadata['placement'])
         if not centering:
@@ -1272,6 +1543,7 @@ def _build_config(
             "title": cover_slide_in.get("title") or intent,
             "body": cover_slide_in.get("subtitle"),  # Subtitle becomes body
             "centering": centering,
+            "subject_region": subject_region,  # For render-time split decision
             "image_description": image_description,  # Preserve description
             "image_reasoning": image_reasoning,  # Preserve reasoning
         }
@@ -1294,6 +1566,15 @@ def _build_config(
             else:
                 anchor = "mid"
 
+        # Force conservative layout (bottom anchor) for flagged slides
+        if "Cover" in conservative_slides or "1" in conservative_slides:
+            anchor = "bottom"
+            if log:
+                log(f"  → Cover slide: forcing bottom anchor (flagged for conservative layout)")
+
+        # Sync fade with anchor to avoid forbidden pairs (e.g., anchor=top + fade=bottom)
+        fade = anchor
+
         overrides[1] = [align, anchor, fade]
 
     # Process content slides (become slides 2, 3, 4, etc.)
@@ -1303,19 +1584,27 @@ def _build_config(
         img = s.get("image") or {}
         source = img.get("source")
         filename = None
-        if source == "upload":
+
+        # Check for REPLACEMENT image first (from BAD match fix)
+        # This takes priority over original assignment
+        if i in external_map:
+            filename = external_map[i]
+            if log and filename and filename.startswith("replacement_"):
+                log(f"  → Slide {i+1}: using replacement image {filename}")
+        elif source == "upload":
             filename = img.get("filename")
-        if source == "external":
+        elif source == "external":
             filename = external_map.get(i)
+
         if not filename and upload_names:
             filename = upload_names[i % len(upload_names)]
 
         # Use intelligent placement based on image analysis
         centering = s.get("centering")
-        split_layout = False
+        subject_region = None
         if filename and filename in placement_map:
             metadata = placement_map[filename]
-            split_layout = metadata.get('split_text', False)
+            subject_region = metadata.get('subject_region')
             if not centering:
                 centering = list(metadata['placement'])
         if not centering:
@@ -1332,7 +1621,7 @@ def _build_config(
             "title": s.get("title") or intent,
             "body": s.get("body"),
             "centering": centering,
-            "split_layout": split_layout,  # Flag for text splitting
+            "subject_region": subject_region,  # For render-time split decision
             "image_description": image_description,  # Preserve description
             "image_reasoning": image_reasoning,  # Preserve reasoning
         }
@@ -1353,6 +1642,17 @@ def _build_config(
                 anchor = "bottom"
             else:
                 anchor = "mid"
+
+        # Force conservative layout (bottom anchor) for flagged slides
+        # Content slide numbers in validation are 1-indexed
+        content_slide_num = str(i + 1)
+        if content_slide_num in conservative_slides:
+            anchor = "bottom"
+            if log:
+                log(f"  → Slide {content_slide_num}: forcing bottom anchor (flagged for conservative layout)")
+
+        # Sync fade with anchor to avoid forbidden pairs (e.g., anchor=top + fade=bottom)
+        fade = anchor
 
         # Add offset to slide number (2, 3, 4, etc. if we have cover)
         overrides[i + 1 + slide_offset] = [align, anchor, fade]

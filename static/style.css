@@ -1,5 +1,21 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap");
 
+@font-face {
+  font-family: "JLeagueKickTitle";
+  src: url("/static/fonts/JLEAGUEKICK-BoldExtraCondensed.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "JLeagueKickKicker";
+  src: url("/static/fonts/JLEAGUEKICK-BoldCondensed.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   --bg: #0f1115;
   --panel: rgba(21, 24, 32, 0.9);
@@ -462,64 +478,189 @@ p {
 
 #editorOverlays {
   position: absolute;
-  top: 28px;
-  left: 28px;
   pointer-events: none;
+  overflow: visible;
 }
 
+/* Direct manipulation text elements - minimal UI */
 .draggable-text {
   position: absolute;
-  padding: 8px 12px;
-  background: rgba(245, 183, 0, 0.2);
-  border: 2px dashed var(--accent);
-  border-radius: 8px;
-  color: var(--text);
+  padding: 4px 8px;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  color: transparent; /* Text invisible - we see the actual rendered text */
   font-family: "Space Grotesk", sans-serif;
-  font-weight: 600;
   pointer-events: auto;
-  transition: background 0.2s;
-  max-width: 600px;
+  transition: border-color 0.15s, background 0.15s;
   cursor: move;
+  user-select: none;
 }
 
+/* Hover state - subtle highlight */
 .draggable-text:hover {
-  background: rgba(245, 183, 0, 0.3);
+  border-color: rgba(245, 183, 0, 0.6);
+  background: rgba(245, 183, 0, 0.08);
 }
 
+/* Selected state */
+.draggable-text.selected {
+  border-color: var(--accent);
+  background: rgba(245, 183, 0, 0.12);
+}
+
+/* Dragging state */
 .draggable-text.dragging {
-  background: rgba(245, 183, 0, 0.4);
-  opacity: 0.9;
+  border-color: var(--accent);
+  background: rgba(245, 183, 0, 0.15);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   z-index: 1000;
   cursor: grabbing;
 }
 
+/* Resize handles - only visible when selected */
+.resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border: 2px solid #111;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.draggable-text.selected .resize-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.resize-handle.nw { top: -5px; left: -5px; cursor: nw-resize; }
+.resize-handle.ne { top: -5px; right: -5px; cursor: ne-resize; }
+.resize-handle.sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.resize-handle.se { bottom: -5px; right: -5px; cursor: se-resize; }
+
+/* Text content - transparent overlay matching rendered text */
 .text-content {
   outline: none;
   white-space: pre-wrap;
   word-wrap: break-word;
-  min-width: 100px;
-  cursor: move;
+  min-width: 60px;
+  line-height: 1.2;
+  color: transparent;
 }
 
-.text-content:focus {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  padding: 4px 6px;
-  margin: -4px -6px;
-  cursor: text;
+/* In raw-preview mode, text must stay visible because image has no baked text */
+#editorOverlays.raw-preview .text-content {
+  color: var(--text);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.75);
 }
 
+#editorOverlays.raw-preview .draggable-text {
+  border-color: transparent;
+  background: transparent;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  width: auto;
+  height: auto;
+  padding: 0;
+  outline: 1px solid rgba(245, 183, 0, 0.45);
+  outline-offset: 2px;
+}
+
+#editorOverlays.raw-preview .draggable-text:hover,
+#editorOverlays.raw-preview .draggable-text.selected {
+  outline-color: rgba(245, 183, 0, 0.9);
+  background: rgba(245, 183, 0, 0.08);
+}
+
+#editorOverlays.raw-preview .draggable-title,
+#editorOverlays.raw-preview .draggable-kicker,
+#editorOverlays.raw-preview .draggable-body {
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+}
+
+#editorOverlays.raw-preview .draggable-title .text-content {
+  font-family: "JLeagueKickTitle", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+#editorOverlays.raw-preview .draggable-kicker .text-content {
+  font-family: "JLeagueKickKicker", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: 0.08em;
+}
+
+#editorOverlays.raw-preview .draggable-body .text-content {
+  font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+  font-weight: 400;
+  line-height: 1.24;
+  letter-spacing: 0;
+}
+
+/* When editing text, show it */
+.draggable-text.editing .text-content {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.85);
+  padding: 8px 12px;
+  margin: -8px -12px;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Size variants to roughly match rendered text */
 .draggable-title {
-  font-size: 18px;
+  font-size: 24px;
+  font-weight: 700;
+  min-width: 200px;
+  min-height: 40px;
 }
 
 .draggable-kicker {
   font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  min-width: 100px;
+  min-height: 24px;
 }
 
 .draggable-body {
-  font-size: 14px;
-  max-width: 300px;
+  font-size: 16px;
+  font-weight: 400;
+  max-width: 350px;
+  min-width: 150px;
+  min-height: 30px;
+}
+
+/* Type label - shows on hover */
+.type-label {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: rgba(0, 0, 0, 0.8);
+  padding: 2px 6px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.draggable-text:hover .type-label,
+.draggable-text.selected .type-label {
+  opacity: 1;
 }
 
 .editor-footer {

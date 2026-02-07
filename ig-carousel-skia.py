@@ -45,7 +45,10 @@ class SlideText:
     kicker: Optional[str]
     title: str
     body: Optional[str]
-    split_layout: bool = False  # If True, separate body from title
+    split_layout: bool = False  # If True, separate body from title (legacy/manual override)
+    subject_region: Optional[str] = None  # 'top', 'middle', or 'bottom' for render-time split decision
+    manual_positions: Optional[dict[str, tuple[float, float]]] = None  # normalized per-text coordinates
+    manual_scales: Optional[dict[str, float]] = None  # per-text size multipliers
 
     def normalized(self) -> "SlideText":
         return SlideText(
@@ -53,6 +56,9 @@ class SlideText:
             normalize_text(self.title) or "",
             normalize_text(self.body),
             self.split_layout,
+            self.subject_region,
+            self.manual_positions,
+            self.manual_scales,
         )
 
 
@@ -402,7 +408,11 @@ def expand_rect(r: Tuple[int,int,int,int], pad: int, W: int, H: int) -> Tuple[in
 
 
 def subject_box(spec: Spec, pil_rgba: Image.Image) -> Tuple[int,int,int,int]:
-    """Approximate subject region by saliency (edges+contrast), return box in full-res coords."""
+    """Approximate subject region by saliency (edges+contrast), return box in full-res coords.
+
+    Enhanced to be more conservative - when in doubt, assumes middle region contains subject.
+    This prevents text from covering people/subjects in action shots.
+    """
     rgb = np.asarray(pil_rgba.convert('RGB'), dtype=np.float32)
     gray = 0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]
     # downsample for speed
@@ -417,24 +427,42 @@ def subject_box(spec: Spec, pil_rgba: Image.Image) -> Tuple[int,int,int,int]:
     dist = dist / (dist.max() + 1e-6)
     score = e * (1.3 - 0.9*dist)
 
-    # threshold top percentile
-    t = np.percentile(score, 92)
+    # threshold top percentile - lowered to 85 to catch more potential subjects
+    t = np.percentile(score, 85)
     mask = score >= t
     if mask.sum() < 50:
-        # fallback: central box
-        return (int(spec.W*0.2), int(spec.H*0.18), int(spec.W*0.8), int(spec.H*0.82))
+        # fallback: central box - expanded to be more conservative
+        return (int(spec.W*0.15), int(spec.H*0.15), int(spec.W*0.85), int(spec.H*0.85))
 
     ys, xs = np.where(mask)
     x0, x1 = xs.min()*ds, (xs.max()+1)*ds
     y0, y1 = ys.min()*ds, (ys.max()+1)*ds
 
-    # expand a bit
-    pad_x = int((x1-x0)*0.10)
-    pad_y = int((y1-y0)*0.10)
+    # expand MORE generously to ensure we don't cut off subjects
+    # Increased from 10% to 20% padding
+    pad_x = int((x1-x0)*0.20)
+    pad_y = int((y1-y0)*0.20)
     x0 = max(0, x0 - pad_x)
     y0 = max(0, y0 - pad_y)
     x1 = min(spec.W, x1 + pad_x)
     y1 = min(spec.H, y1 + pad_y)
+
+    # Ensure minimum subject box size - subjects shouldn't be tiny
+    min_width = int(spec.W * 0.3)
+    min_height = int(spec.H * 0.3)
+    current_width = x1 - x0
+    current_height = y1 - y0
+
+    if current_width < min_width:
+        expand_x = (min_width - current_width) // 2
+        x0 = max(0, x0 - expand_x)
+        x1 = min(spec.W, x1 + expand_x)
+
+    if current_height < min_height:
+        expand_y = (min_height - current_height) // 2
+        y0 = max(0, y0 - expand_y)
+        y1 = min(spec.H, y1 + expand_y)
+
     return (int(x0), int(y0), int(x1), int(y1))
 
 
@@ -452,6 +480,7 @@ def best_layout_for_slide(spec: Spec, pil_rgba: Image.Image, slide: SlideText, l
     """Return (align, anchor, fade) using readability + overlap constraints.
 
     Logo is a fixed brand mark (locked corner) and treated as a hard exclusion zone.
+    Subject avoidance is HIGH PRIORITY - never place text over detected subjects.
     """
     subj = subject_box(spec, pil_rgba)
     # Add clearspace so text never feels cramped against the logo
@@ -480,14 +509,16 @@ def best_layout_for_slide(spec: Spec, pil_rgba: Image.Image, slide: SlideText, l
         y1 = int(min(spec.H - spec.margin_b, y0 + h))
         return (x0, y0, x1, y1)
 
-    # Candidates like the Example: corners + centered band
+    # Candidates - prioritize top/bottom anchors over mid to avoid subject overlap
+    # Order matters: bottom positions first (most common safe zone), then top, mid last
     candidates = [
         ("left", "bottom"),
-        ("right", "bottom"),
         ("center", "bottom"),
+        ("right", "bottom"),
         ("left", "top"),
+        ("center", "top"),
         ("right", "top"),
-        ("center", "mid"),
+        ("center", "mid"),  # Mid is last resort - highest chance of subject overlap
     ]
 
     best = None
@@ -495,10 +526,20 @@ def best_layout_for_slide(spec: Spec, pil_rgba: Image.Image, slide: SlideText, l
         tb = box_for(align, anchor)
         overlap_logo = rect_iou(tb, logo_box)
         overlap_subj = rect_iou(tb, subj)
+
         # Hard exclusion: if text box intersects logo zone at all, skip.
         if overlap_logo > 0.0:
             continue
-        s = score_box(pil_rgba, tb) + overlap_subj*140.0
+
+        # HEAVY penalty for subject overlap - increased from 140 to 500
+        # Any overlap > 5% is heavily penalized to push text away from subjects
+        if overlap_subj > 0.05:
+            subject_penalty = 500.0 + overlap_subj * 300.0
+        else:
+            subject_penalty = 0.0
+
+        s = score_box(pil_rgba, tb) + subject_penalty
+
         if best is None or s < best[0]:
             best = (s, align, anchor, tb)
 
@@ -510,10 +551,8 @@ def best_layout_for_slide(spec: Spec, pil_rgba: Image.Image, slide: SlideText, l
     else:
         s, align, anchor, tb = best
 
-    if s > 40:
-        fade = "top" if anchor == "top" else ("mid" if anchor == "mid" else "bottom")
-    else:
-        fade = "none"
+    # Sync fade with anchor (Issue 3 fix)
+    fade = anchor
 
     return align, anchor, fade
 
@@ -573,18 +612,31 @@ def draw_text_block(
     align: str = "left",
     anchor: str = "bottom",
     contrast_hint: Optional[Image.Image] = None,
-):
+) -> dict[str, tuple[float, float]]:
     title_tf, kicker_tf, body_tf = skia_typefaces()
 
-    font_k = skia.Font(kicker_tf, spec.kicker_size)
-    font_t = skia.Font(title_tf, spec.title_size)
-    font_b = skia.Font(body_tf, spec.body_size)
+    manual_scales = getattr(slide, "manual_scales", None) or {}
+
+    def scale_for(text_type: str) -> float:
+        raw = manual_scales.get(text_type, 1.0)
+        try:
+            return max(0.5, min(3.0, float(raw)))
+        except Exception:
+            return 1.0
+
+    kicker_scale = scale_for("kicker")
+    title_scale = scale_for("title")
+    body_scale = scale_for("body")
+
+    font_k = skia.Font(kicker_tf, spec.kicker_size * kicker_scale)
+    font_t = skia.Font(title_tf, spec.title_size * title_scale)
+    font_b = skia.Font(body_tf, spec.body_size * body_scale)
     font_n = skia.Font(body_tf, spec.slide_num_size)
 
     # Fallback fonts (use body typeface to cover punctuation/symbols)
-    font_k_fb = skia.Font(body_tf, spec.kicker_size)
-    font_t_fb = skia.Font(body_tf, spec.title_size)
-    font_b_fb = skia.Font(body_tf, spec.body_size)
+    font_k_fb = skia.Font(body_tf, spec.kicker_size * kicker_scale)
+    font_t_fb = skia.Font(body_tf, spec.title_size * title_scale)
+    font_b_fb = skia.Font(body_tf, spec.body_size * body_scale)
     for f in (font_k, font_t, font_b, font_n, font_k_fb, font_t_fb, font_b_fb):
         f.setEdging(skia.Font.Edging.kSubpixelAntiAlias)
 
@@ -597,8 +649,43 @@ def draw_text_block(
     mt = font_t.getMetrics(); ht = mt.fDescent - mt.fAscent
     mb = font_b.getMetrics(); hb = mb.fDescent - mb.fAscent
 
-    # Check if we should split title and body
-    split_mode = getattr(slide, 'split_layout', False) and body_lines
+    # Determine if we should split title and body based on ACTUAL text height
+    # Priority: 1) Manual split_layout flag, 2) Render-time decision based on subject_region
+    split_mode = False
+
+    if body_lines:
+        # Check manual override first (backward compatibility)
+        if getattr(slide, 'split_layout', False):
+            split_mode = True
+        # Otherwise, make render-time decision based on subject_region and actual text height
+        elif getattr(slide, 'subject_region', None):
+            subject_region = slide.subject_region
+
+            # Calculate total block height
+            total_block_h = 0
+            if kicker_lines:
+                total_block_h += len(kicker_lines) * (hk + 6) + spec.gap
+            total_block_h += len(title_lines) * (ht + 2)
+            if body_lines:
+                total_block_h += spec.gap + len(body_lines) * (hb + 8)
+
+            # Define region boundaries (in pixels)
+            # Image is 1350px high, divided into thirds: 0-450, 450-900, 900-1350
+            region_boundary_top = spec.H // 3      # 450px
+            region_boundary_mid = 2 * spec.H // 3  # 900px
+
+            # Calculate where text block would end based on anchor
+            if anchor == "top":
+                text_end_y = spec.margin_t + total_block_h
+                # Check if text extends into subject region
+                if subject_region == "middle" and text_end_y > region_boundary_top:
+                    split_mode = True
+            elif anchor == "bottom":
+                text_start_y = spec.H - spec.margin_b - total_block_h
+                # Check if text extends into subject region
+                if subject_region == "middle" and text_start_y < region_boundary_mid:
+                    split_mode = True
+            # For anchor == "mid", we typically don't split as text is centered
 
     if split_mode:
         # Calculate title block height (kicker + title only)
@@ -675,13 +762,132 @@ def draw_text_block(
             a = 120 if kind == 'title' else 90
         return skia.Paint(AntiAlias=True, Color=skia.ColorSetARGB(a, 0, 0, 0))
 
+    def center_of_group(lines: list[str], font: skia.Font, center_y: float, step: float) -> tuple[float, float]:
+        if not lines:
+            return spec.W * 0.5, center_y
+        max_w = max(font.measureText(line) for line in lines)
+        return spec.W * 0.5, center_y
+
+    def manual_xy_for(text_type: str) -> Optional[tuple[float, float]]:
+        manual = getattr(slide, "manual_positions", None) or {}
+        raw = manual.get(text_type)
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            return None
+        try:
+            x = float(raw[0])
+            y = float(raw[1])
+        except Exception:
+            return None
+        # Treat small-magnitude values as normalized.
+        if -2.0 <= x <= 2.0 and -2.0 <= y <= 2.0:
+            return x * spec.W, y * spec.H
+        return x, y
+
+    def draw_group_at_center(
+        lines: list[str],
+        font: skia.Font,
+        font_fb: skia.Font,
+        metrics: skia.FontMetrics,
+        line_step: float,
+        center_x: float,
+        center_y: float,
+        kind: str,
+        main_paint: skia.Paint,
+    ) -> None:
+        if not lines:
+            return
+
+        line_h = metrics.fDescent - metrics.fAscent
+        total_h = len(lines) * line_step
+        y = center_y - (total_h * 0.5)
+
+        for line in lines:
+            text_w = font.measureText(line)
+            x = center_x - (text_w * 0.5)
+            baseline = y - metrics.fAscent
+            luma = local_luma(x, baseline - line_h, x + text_w, baseline + line_h)
+            sh = shadow_paint_for(luma, kind)
+
+            if kind == "title":
+                if luma >= 175:
+                    for dx, dy in [(0, 3), (1.5, 3), (-1.5, 3), (0, 2)]:
+                        draw_string_with_fallback(canvas, line, x + dx, baseline + dy, font, font_fb, sh)
+                else:
+                    draw_string_with_fallback(canvas, line, x, baseline + 3, font, font_fb, sh)
+                draw_string_with_fallback(canvas, line, x, baseline, font, font_fb, main_paint)
+            else:
+                shadow_dy = 2 if kind == "kicker" else 1.5
+                draw_string_with_fallback(canvas, line, x, baseline + shadow_dy, font, font_fb, sh)
+                draw_string_with_fallback(canvas, line, x, baseline, font, font_fb, main_paint)
+
+            y += line_step
+
+    # Manual per-text coordinates override auto layout and allow independent movement.
+    manual_title = manual_xy_for("title")
+    if manual_title is not None:
+        title_x, title_y = manual_title
+        has_kicker = bool(kicker_lines)
+        has_body = bool(body_lines)
+        kicker_offset = 0
+        body_offset = 0
+        if has_kicker and has_body:
+            kicker_offset = -80
+            body_offset = 100
+        elif has_kicker:
+            kicker_offset = -60
+        elif has_body:
+            body_offset = 80
+
+        kicker_xy = manual_xy_for("kicker") if has_kicker else None
+        body_xy = manual_xy_for("body") if has_body else None
+
+        if has_kicker and kicker_xy is None:
+            kicker_xy = (title_x, title_y + kicker_offset)
+        if has_body and body_xy is None:
+            body_xy = (title_x, title_y + body_offset)
+
+        if has_kicker and kicker_xy is not None:
+            draw_group_at_center(
+                kicker_lines, font_k, font_k_fb, mk, hk + 6,
+                kicker_xy[0], kicker_xy[1], "kicker", white_soft
+            )
+        draw_group_at_center(
+            title_lines, font_t, font_t_fb, mt, ht + 2,
+            title_x, title_y, "title", white
+        )
+        if has_body and body_xy is not None:
+            draw_group_at_center(
+                body_lines, font_b, font_b_fb, mb, hb + 8,
+                body_xy[0], body_xy[1], "body", white_soft
+            )
+        out = {"title": (title_x, title_y)}
+        if has_kicker and kicker_xy is not None:
+            out["kicker"] = kicker_xy
+        if has_body and body_xy is not None:
+            out["body"] = body_xy
+        return out
+
     # Set starting y position (title block)
     y = y_top_title if split_mode else y_top
+    group_bounds: dict[str, dict[str, float]] = {}
+
+    def update_bounds(kind: str, x: float, top: float, w: float, h: float) -> None:
+        b = group_bounds.get(kind)
+        x1 = x + w
+        y1 = top + h
+        if b is None:
+            group_bounds[kind] = {"min_x": x, "min_y": top, "max_x": x1, "max_y": y1}
+            return
+        b["min_x"] = min(b["min_x"], x)
+        b["min_y"] = min(b["min_y"], top)
+        b["max_x"] = max(b["max_x"], x1)
+        b["max_y"] = max(b["max_y"], y1)
 
     # Kicker
     for line in kicker_lines:
         x = x_for(line, font_k)
         baseline = y - mk.fAscent
+        update_bounds("kicker", x, baseline - hk, font_k.measureText(line), hk * 2)
         luma = local_luma(x, baseline - hk, x + font_k.measureText(line), baseline + hk)
         sh = shadow_paint_for(luma, 'body')
         # shadow
@@ -696,6 +902,7 @@ def draw_text_block(
     for line in title_lines:
         x = x_for(line, font_t)
         baseline = y - mt.fAscent
+        update_bounds("title", x, baseline - ht, font_t.measureText(line), ht * 2)
         luma = local_luma(x, baseline - ht, x + font_t.measureText(line), baseline + ht)
         sh = shadow_paint_for(luma, 'title')
         # pseudo-stroke (subtle) for very bright areas
@@ -717,14 +924,17 @@ def draw_text_block(
         for line in body_lines:
             x = x_for(line, font_b)
             baseline = y - mb.fAscent
+            update_bounds("body", x, baseline - hb, font_b.measureText(line), hb * 2)
             luma = local_luma(x, baseline - hb, x + font_b.measureText(line), baseline + hb)
             sh = shadow_paint_for(luma, 'body')
             draw_string_with_fallback(canvas, line, x, baseline + 1.5, font_b, font_b_fb, sh)
             draw_string_with_fallback(canvas, line, x, baseline, font_b, font_b_fb, white_soft)
             y += hb + 8
 
-    # Slide number: removed per request
-    # (intentionally blank)
+    out: dict[str, tuple[float, float]] = {}
+    for kind, b in group_bounds.items():
+        out[kind] = ((b["min_x"] + b["max_x"]) * 0.5, (b["min_y"] + b["max_y"]) * 0.5)
+    return out
 
 
 def draw_logo(canvas: skia.Canvas, logo: skia.Image, spec: Spec, corner: str = 'tl'):
@@ -747,13 +957,54 @@ def render_slide(
     logo_img: skia.Image,
     centering=(0.5, 0.35),
     override_layout: tuple[str, str, str] | None = None,
-):
+) -> dict[str, tuple[float, float]]:
     bg, pil_rgba = pil_to_skia_image(bg_path, spec.W, spec.H, centering=centering)
+
+    # Always compute best layout to use for subject avoidance check
+    auto_align, auto_anchor, auto_fade = best_layout_for_slide(spec, pil_rgba, slide, logo_corner='tl')
 
     if override_layout is not None:
         align, anchor, fade = override_layout
+
+        # Check if override causes logo or SUBJECT overlap - if so, fall back to best_layout_for_slide
+        logo_box = expand_rect(logo_boxes(spec)['tl'], pad=24, W=spec.W, H=spec.H)
+        subj = subject_box(spec, pil_rgba)  # Get subject region for overlap check
+
+        block_w, block_h, _ = text_block_metrics(spec, slide)
+        max_w = spec.W - spec.margin_l - spec.margin_r
+        w = max(block_w, max_w * 0.82)
+        h = block_h + 10
+
+        # Calculate text box position based on override
+        if align == "center":
+            x0 = int((spec.W - w) / 2)
+        elif align == "right":
+            x0 = int(spec.W - spec.margin_r - w)
+        else:  # left
+            x0 = int(spec.margin_l)
+        x1 = int(min(spec.W - spec.margin_r, x0 + w))
+
+        if anchor == "top":
+            y0 = int(spec.margin_t)
+        elif anchor == "mid":
+            y0 = int((spec.H - h) * 0.50)
+        else:  # bottom
+            y0 = int(spec.H - spec.margin_b - h)
+        y1 = int(min(spec.H - spec.margin_b, y0 + h))
+
+        text_box = (x0, y0, x1, y1)
+
+        # Check for logo overlap
+        logo_overlap = rect_iou(text_box, logo_box) > 0
+
+        # Check for significant subject overlap (threshold: 15% IoU)
+        subject_overlap = rect_iou(text_box, subj) > 0.15
+
+        if logo_overlap or subject_overlap:
+            # Override causes overlap - fall back to automatic layout
+            align, anchor, fade = auto_align, auto_anchor, auto_fade
     else:
-        align, anchor, fade = best_layout_for_slide(spec, pil_rgba, slide, logo_corner='tl')
+        align, anchor, fade = auto_align, auto_anchor, auto_fade
 
     # Cover slide (slide 1) gets special treatment - EXTRA large, bold text
     is_cover = slide_num == 1 and slide.kicker is None
@@ -785,12 +1036,16 @@ def render_slide(
     # Fade disabled per user request - no black shadow banners
     draw_linear_fade(canvas, spec, where="none")
     draw_logo(canvas, logo_img, spec, corner='tl')
-    draw_text_block(canvas, spec, slide.normalized(), slide_num, total, align=align, anchor=anchor, contrast_hint=pil_rgba)
+    text_positions = draw_text_block(
+        canvas, spec, slide.normalized(), slide_num, total,
+        align=align, anchor=anchor, contrast_hint=pil_rgba
+    )
 
     img = surface.makeImageSnapshot()
     data = img.encodeToData(skia.EncodedImageFormat.kJPEG, 95)
     with open(out_path, "wb") as f:
         f.write(bytes(data))
+    return text_positions
 
 
 def main():
@@ -824,9 +1079,43 @@ def main():
             kicker = s.get("kicker")
             title = s.get("title") or ""
             body = s.get("body")
-            split_layout = s.get("split_layout", False)
+            split_layout = s.get("split_layout", False)  # Legacy/manual override
+            subject_region = s.get("subject_region")  # For render-time split decision
+            manual_positions_raw = s.get("manual_positions") or {}
+            manual_positions = {}
+            if isinstance(manual_positions_raw, dict):
+                for key in ("kicker", "title", "body"):
+                    raw = manual_positions_raw.get(key)
+                    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+                        try:
+                            manual_positions[key] = (float(raw[0]), float(raw[1]))
+                        except Exception:
+                            pass
+            manual_scales_raw = s.get("manual_scales") or {}
+            manual_scales = {}
+            if isinstance(manual_scales_raw, dict):
+                for key in ("kicker", "title", "body"):
+                    raw = manual_scales_raw.get(key)
+                    if raw is None:
+                        continue
+                    try:
+                        manual_scales[key] = float(raw)
+                    except Exception:
+                        pass
             centering = tuple(s.get("centering") or [0.5, 0.35])
-            slides.append((photo, SlideText(kicker, title, body, split_layout).normalized(), centering))
+            slides.append((
+                photo,
+                SlideText(
+                    kicker,
+                    title,
+                    body,
+                    split_layout,
+                    subject_region,
+                    manual_positions or None,
+                    manual_scales or None,
+                ).normalized(),
+                centering,
+            ))
 
         overrides_raw = cfg.get("overrides") or {}
         overrides: dict[int, tuple[str, str, str]] = {}
@@ -837,9 +1126,30 @@ def main():
                 pass
 
         total = len(slides)
+        updated_manual_positions = False
         for i, (bg, txt, centering) in enumerate(slides, start=1):
             out = os.path.join(out_dir, f"Artboard {i}.jpg")
-            render_slide(bg, out, spec, txt, i, total, logo, centering=centering, override_layout=overrides.get(i))
+            positions_px = render_slide(
+                bg, out, spec, txt, i, total, logo,
+                centering=centering, override_layout=overrides.get(i)
+            )
+
+            # Backfill initial editable positions so editor opens at true rendered placement.
+            src_slide = slides_in[i - 1]
+            if not src_slide.get("manual_positions") and positions_px:
+                src_slide["manual_positions"] = {
+                    k: [v[0] / spec.W, v[1] / spec.H]
+                    for k, v in positions_px.items()
+                }
+                updated_manual_positions = True
+
+        # Persist backfilled positions to config for future edit sessions.
+        if updated_manual_positions and cfg_path:
+            try:
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2)
+            except Exception:
+                pass
 
         print(out_dir)
         return

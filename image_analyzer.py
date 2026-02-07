@@ -5,12 +5,20 @@ Analyzes images to determine the best position for text overlays based on:
 - Background brightness/darkness (prefer dark areas for white text)
 - Subject location (avoid covering important subjects)
 - Visual complexity (prefer simpler areas)
+- Face detection (prioritized over edge detection when faces present)
 """
 
 from PIL import Image
 import numpy as np
 from typing import Tuple, Optional
 from pathlib import Path
+
+# Try to import OpenCV for face detection (graceful degradation if not available)
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
 
 
 def analyze_brightness_regions(image_path: str) -> dict[str, float]:
@@ -39,12 +47,80 @@ def analyze_brightness_regions(image_path: str) -> dict[str, float]:
     }
 
 
-def analyze_subject_location(image_path: str) -> Optional[str]:
+def _detect_faces_region(image_path: str) -> Optional[str]:
     """
-    Detect where the main subject is located using simple edge detection.
+    Detect faces using OpenCV Haar cascades and return the region containing them.
+
+    Returns 'top', 'middle', or 'bottom' based on where faces are detected.
+    Returns None if no faces found or OpenCV not available.
+    """
+    if not OPENCV_AVAILABLE:
+        return None
+
+    try:
+        # Load the image
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        height = gray.shape[0]
+        third = height // 3
+
+        # Load Haar cascade classifiers for frontal and profile faces
+        face_cascade_frontal = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        )
+        face_cascade_profile = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_profileface.xml'
+        )
+
+        # Detect frontal faces
+        faces_frontal = face_cascade_frontal.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        )
+
+        # Detect profile faces
+        faces_profile = face_cascade_profile.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        )
+
+        # Combine all detected faces
+        all_faces = list(faces_frontal) + list(faces_profile)
+
+        if len(all_faces) == 0:
+            return None
+
+        # Calculate the bounding box containing all faces
+        min_y = float('inf')
+        max_y = 0
+
+        for (x, y, w, h) in all_faces:
+            min_y = min(min_y, y)
+            max_y = max(max_y, y + h)
+
+        # Find the center of the face region
+        face_center_y = (min_y + max_y) / 2
+
+        # Determine which region the faces are in
+        if face_center_y < third:
+            return 'top'
+        elif face_center_y < 2 * third:
+            return 'middle'
+        else:
+            return 'bottom'
+
+    except Exception as e:
+        print(f"  ⚠️ Face detection failed: {e}")
+        return None
+
+
+def _analyze_subject_by_edges(image_path: str) -> str:
+    """
+    Detect where the main subject is located using edge detection.
 
     Returns 'top', 'middle', or 'bottom' based on where most visual activity is.
-    This is a simple heuristic - more complex logic could use face detection or OpenAI Vision.
+    This works well for crowds, landscapes, and scenes without clear faces.
     """
     img = Image.open(image_path).convert('L')
     arr = np.array(img)
@@ -69,6 +145,31 @@ def analyze_subject_location(image_path: str) -> Optional[str]:
     return max(activities, key=activities.get)
 
 
+def analyze_subject_location(image_path: str) -> Optional[str]:
+    """
+    Detect where the main subject is located using face detection with edge fallback.
+
+    Priority:
+    1. Try face detection first (if OpenCV available)
+    2. If faces found → return region containing faces
+    3. If NO faces found → fall back to edge detection
+
+    Edge detection fallback handles:
+    - Crowd shots (finds where the crowd is)
+    - Landscapes (finds visual mass)
+    - Stadium views (identifies main elements)
+
+    Returns 'top', 'middle', or 'bottom' based on where the subject is.
+    """
+    # Try face detection first
+    face_region = _detect_faces_region(image_path)
+    if face_region is not None:
+        return face_region
+
+    # Fall back to edge detection for crowds, landscapes, etc.
+    return _analyze_subject_by_edges(image_path)
+
+
 def get_optimal_text_placement(
     image_path: str,
     prefer_dark: bool = True,
@@ -86,7 +187,8 @@ def get_optimal_text_placement(
 
     Returns:
         If return_metadata=False: Tuple of (x_center, y_center)
-        If return_metadata=True: Dict with 'placement', 'subject_region', 'split_text'
+        If return_metadata=True: Dict with 'placement', 'subject_region', 'text_region'
+            Note: split_text decision is now made at render time based on actual text height
     """
     brightness = analyze_brightness_regions(image_path)
     subject_region = analyze_subject_location(image_path) if avoid_subject else None
@@ -133,26 +235,13 @@ def get_optimal_text_placement(
         x_position = 0.5
 
     if return_metadata:
-        # Determine if text should be split
-        # Split when subject is in middle (text from top/bottom might extend into it)
-        # OR when text is placed in adjacent region (risk of overlap)
-        should_split = False
-        if subject_region:
-            if subject_region == 'middle':
-                # Subject in middle - text from top or bottom might extend into it
-                should_split = True
-            elif (best_region == 'top' and subject_region == 'middle') or \
-                 (best_region == 'bottom' and subject_region == 'middle') or \
-                 (best_region == 'top' and subject_region == 'top') or \
-                 (best_region == 'bottom' and subject_region == 'bottom'):
-                # Text adjacent to or overlapping subject
-                should_split = True
-
+        # Return subject_region for use in render-time split decision
+        # The actual split_text decision is now made at render time based on
+        # actual text height, not pre-computed here
         return {
             'placement': (x_position, y_position),
             'subject_region': subject_region,
             'text_region': best_region,
-            'split_text': should_split
         }
     else:
         return (x_position, y_position)
@@ -164,7 +253,7 @@ def analyze_all_images(image_paths: list[str], return_metadata: bool = False) ->
 
     Args:
         image_paths: List of image file paths
-        return_metadata: If True, include subject info for text splitting
+        return_metadata: If True, include subject info for render-time split decision
 
     Returns:
         Dict mapping image filename to placement info (tuple or dict based on return_metadata)
@@ -180,10 +269,10 @@ def analyze_all_images(image_paths: list[str], return_metadata: bool = False) ->
             # Logging
             if return_metadata:
                 y_pos = result['placement'][1]
-                split_flag = " (split layout)" if result.get('split_text') else ""
+                subject_info = f", subject={result.get('subject_region', 'unknown')}" if result.get('subject_region') else ""
             else:
                 y_pos = result[1]
-                split_flag = ""
+                subject_info = ""
 
             if y_pos < 0.4:
                 anchor = "top"
@@ -192,7 +281,7 @@ def analyze_all_images(image_paths: list[str], return_metadata: bool = False) ->
             else:
                 anchor = "mid"
 
-            print(f"✓ {filename}: text at {anchor}{split_flag} (y={y_pos:.2f})")
+            print(f"✓ {filename}: text at {anchor} (y={y_pos:.2f}{subject_info})")
         except Exception as e:
             print(f"⚠ Failed to analyze {filename}: {e}, using default")
             if return_metadata:
@@ -200,7 +289,6 @@ def analyze_all_images(image_paths: list[str], return_metadata: bool = False) ->
                     'placement': (0.5, 0.35),
                     'subject_region': None,
                     'text_region': 'middle',
-                    'split_text': False
                 }
             else:
                 placements[filename] = (0.5, 0.35)

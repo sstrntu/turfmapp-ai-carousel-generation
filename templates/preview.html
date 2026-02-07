@@ -167,6 +167,132 @@
       font-style: italic;
     }
 
+    /* Image change controls */
+    .image-change-controls {
+      margin-top: 16px;
+      padding: 16px;
+      background: rgba(100, 150, 255, 0.05);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      border-radius: 8px;
+    }
+
+    .image-change-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #6496ff;
+    }
+
+    .image-change-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .image-tab {
+      padding: 8px 16px;
+      border: 1px solid var(--panel-border);
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .image-tab:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .image-tab.active {
+      background: var(--accent);
+      color: #111;
+      border-color: var(--accent);
+    }
+
+    .image-change-panel {
+      display: none;
+    }
+
+    .image-change-panel.active {
+      display: block;
+    }
+
+    .image-select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--panel-border);
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--text);
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .image-select:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    .image-search-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .image-search-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--panel-border);
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--text);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    .image-search-input:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    .image-search-btn {
+      padding: 10px 20px;
+      background: #6496ff;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .image-search-btn:hover {
+      background: #7aa5ff;
+    }
+
+    .image-search-btn:disabled {
+      background: #444;
+      cursor: not-allowed;
+    }
+
+    .image-change-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .image-change-status.success {
+      color: #4ade80;
+    }
+
+    .image-change-status.error {
+      color: #f87171;
+    }
+
     .approval-actions {
       display: flex;
       gap: 16px;
@@ -238,6 +364,96 @@
       letter-spacing: 0.1em;
       margin-top: 4px;
     }
+
+    .position-edit-actions {
+      margin: 12px 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .position-edit-btn {
+      padding: 8px 14px;
+      border: 1px solid rgba(245, 183, 0, 0.4);
+      background: rgba(245, 183, 0, 0.08);
+      color: var(--text);
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .position-edit-btn:hover:enabled {
+      border-color: var(--accent);
+      background: rgba(245, 183, 0, 0.14);
+    }
+
+    .position-edit-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .position-hint {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #positionEditorOverlays {
+      position: absolute;
+      overflow: visible;
+    }
+
+    .preview-text-item {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      max-width: 560px;
+      padding: 10px 14px;
+      border: 2px solid rgba(245, 183, 0, 0.75);
+      border-radius: 10px;
+      background: rgba(8, 10, 16, 0.5);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      cursor: move;
+      user-select: none;
+      white-space: pre-wrap;
+      text-align: center;
+    }
+
+    .preview-text-item.dragging {
+      background: rgba(8, 10, 16, 0.72);
+      border-color: var(--accent);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+    }
+
+    .preview-text-item.kicker {
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .preview-text-item.title {
+      color: var(--text);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-transform: uppercase;
+      min-width: 220px;
+    }
+
+    .preview-text-item.body {
+      color: rgba(244, 246, 251, 0.92);
+      font-size: 16px;
+      line-height: 1.35;
+      min-width: 260px;
+    }
+
+    .position-editor-note {
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -306,6 +522,18 @@
           <p class="slide-body" contenteditable="true" data-field="body">{{ slide.body or "Click to add body text..." }}</p>
 
           <div class="editable-hint">💡 Click any text to edit it</div>
+          <div class="position-edit-actions">
+            <button
+              class="position-edit-btn"
+              type="button"
+              data-action="adjust-position"
+              data-slide-num="{{ loop.index }}"
+              {% if not slide.image_url %}disabled title="Set an image first to adjust text position"{% endif %}
+            >
+              Move Text Overlay
+            </button>
+            <span class="position-hint">Text will embed only after final generate</span>
+          </div>
 
           <div class="slide-image-info">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
@@ -333,6 +561,30 @@
             <div class="image-reasoning-text">"{{ slide.image_reasoning }}"</div>
           </div>
           {% endif %}
+
+          <!-- Image Change Controls -->
+          <div class="image-change-controls" data-slide-index="{{ loop.index0 }}">
+            <div class="image-change-header">
+              <span>🔄</span>
+              <span>Change Image</span>
+            </div>
+            <div class="image-change-tabs">
+              <button class="image-tab active" data-tab="upload">Use Uploaded</button>
+              <button class="image-tab" data-tab="external">Search Online</button>
+            </div>
+            <div class="image-change-panel active" data-panel="upload">
+              <select class="image-select" data-action="select-upload">
+                <option value="">-- Select an uploaded image --</option>
+              </select>
+            </div>
+            <div class="image-change-panel" data-panel="external">
+              <div class="image-search-row">
+                <input type="text" class="image-search-input" placeholder="Enter search query..." data-action="search-query">
+                <button class="image-search-btn" data-action="search-external">Search</button>
+              </div>
+            </div>
+            <div class="image-change-status"></div>
+          </div>
         </div>
       </div>
       {% endfor %}
@@ -349,9 +601,512 @@
     </section>
   </main>
 
+  <div class="editor-modal" id="positionEditorModal" aria-hidden="true">
+    <div class="editor-container">
+      <div class="editor-header">
+        <h2>Adjust Text Position</h2>
+        <p class="position-editor-note">Drag kicker, title, and body independently before final rendering.</p>
+        <button class="editor-close" id="positionEditorClose" type="button">✕</button>
+      </div>
+      <div class="editor-canvas-wrapper" id="positionEditorCanvasWrapper">
+        <canvas id="positionEditorCanvas"></canvas>
+        <div id="positionEditorOverlays"></div>
+      </div>
+      <div class="editor-footer">
+        <button class="button-secondary" id="positionEditorCancel" type="button">Cancel</button>
+        <button class="button-primary" id="positionEditorSave" type="button">Save Position</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const runId = "{{ run_id }}";
     const isRerender = {{ 'true' if is_rerender else 'false' }};
+    let availableImages = [];
+    const PLACEHOLDER_KICKER = "Click to add kicker...";
+    const PLACEHOLDER_BODY = "Click to add body text...";
+
+    const positionEditorModal = document.getElementById("positionEditorModal");
+    const positionEditorClose = document.getElementById("positionEditorClose");
+    const positionEditorCancel = document.getElementById("positionEditorCancel");
+    const positionEditorSave = document.getElementById("positionEditorSave");
+    const positionEditorCanvas = document.getElementById("positionEditorCanvas");
+    const positionEditorCanvasWrapper = document.getElementById("positionEditorCanvasWrapper");
+    const positionEditorOverlays = document.getElementById("positionEditorOverlays");
+    const positionEditorCtx = positionEditorCanvas.getContext("2d");
+
+    let editorScale = 1;
+    let activeSlideNum = null;
+    let activeButton = null;
+    let activeTextElements = [];
+    let dragCleanups = [];
+
+    function normalizeOptionalText(value, placeholder) {
+      const trimmed = (value || "").trim();
+      if (!trimmed || trimmed === placeholder) {
+        return null;
+      }
+      return trimmed;
+    }
+
+    function getSlideTextData(slidePreview) {
+      const kickerEl = slidePreview.querySelector('[data-field="kicker"]');
+      const titleEl = slidePreview.querySelector('[data-field="title"]');
+      const bodyEl = slidePreview.querySelector('[data-field="body"]');
+
+      return {
+        kicker: normalizeOptionalText(kickerEl ? kickerEl.textContent : "", PLACEHOLDER_KICKER),
+        title: (titleEl ? titleEl.textContent : "").trim(),
+        body: normalizeOptionalText(bodyEl ? bodyEl.textContent : "", PLACEHOLDER_BODY)
+      };
+    }
+
+    async function fetchSlideConfig(slideNum) {
+      const res = await fetch(`/api/slide-config/${runId}/${slideNum}`);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    function updatePositionOverlayBounds() {
+      const canvasRect = positionEditorCanvas.getBoundingClientRect();
+      const wrapperRect = positionEditorCanvasWrapper.getBoundingClientRect();
+
+      positionEditorOverlays.style.top = (canvasRect.top - wrapperRect.top) + "px";
+      positionEditorOverlays.style.left = (canvasRect.left - wrapperRect.left) + "px";
+      positionEditorOverlays.style.width = canvasRect.width + "px";
+      positionEditorOverlays.style.height = canvasRect.height + "px";
+    }
+
+    function buildTextItem(type, text, pos) {
+      const el = document.createElement("div");
+      el.className = `preview-text-item ${type}`;
+      el.textContent = text;
+      el.style.left = (pos.x * editorScale) + "px";
+      el.style.top = (pos.y * editorScale) + "px";
+
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let startLeft = 0;
+      let startTop = 0;
+
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = parseFloat(el.style.left);
+        startTop = parseFloat(el.style.top);
+        el.classList.add("dragging");
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "grabbing";
+      });
+
+      const onMove = (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        el.style.left = (startLeft + dx) + "px";
+        el.style.top = (startTop + dy) + "px";
+      };
+
+      const onUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      };
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+
+      dragCleanups.push(() => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      });
+
+      positionEditorOverlays.appendChild(el);
+      activeTextElements.push({ type, element: el });
+    }
+
+    function createDraggableTextElements(config, textData) {
+      positionEditorOverlays.innerHTML = "";
+      activeTextElements = [];
+      dragCleanups.forEach((fn) => fn());
+      dragCleanups = [];
+
+      const hasKicker = !!textData.kicker;
+      const hasBody = !!textData.body;
+      const titlePos = config?.title_pos || { x: 540, y: 473 };
+
+      let kickerOffset = 0;
+      let bodyOffset = 0;
+      if (hasKicker && hasBody) {
+        kickerOffset = -80;
+        bodyOffset = 100;
+      } else if (hasKicker) {
+        kickerOffset = -60;
+      } else if (hasBody) {
+        bodyOffset = 80;
+      }
+
+      if (hasKicker) {
+        buildTextItem(
+          "kicker",
+          textData.kicker,
+          config?.kicker_pos || { x: titlePos.x, y: titlePos.y + kickerOffset }
+        );
+      }
+
+      buildTextItem("title", textData.title || "", titlePos);
+
+      if (hasBody) {
+        buildTextItem(
+          "body",
+          textData.body,
+          config?.body_pos || { x: titlePos.x, y: titlePos.y + bodyOffset }
+        );
+      }
+    }
+
+    function closePositionEditor() {
+      positionEditorModal.classList.remove("open");
+      positionEditorModal.setAttribute("aria-hidden", "true");
+      positionEditorOverlays.innerHTML = "";
+      activeTextElements = [];
+      activeSlideNum = null;
+      activeButton = null;
+      dragCleanups.forEach((fn) => fn());
+      dragCleanups = [];
+    }
+
+    async function openPositionEditor(slideNum, button) {
+      const slideIndex = slideNum - 1;
+      const slidePreview = document.querySelector(`.slide-preview[data-slide-index="${slideIndex}"]`);
+      if (!slidePreview) return;
+
+      const imageEl = slidePreview.querySelector(".slide-image-preview img");
+      if (!imageEl) {
+        alert("Set an image first, then adjust text position.");
+        return;
+      }
+
+      const textData = getSlideTextData(slidePreview);
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = imageEl.src;
+
+      img.onload = async () => {
+        const maxW = Math.min(window.innerWidth * 0.75, 900);
+        const maxH = window.innerHeight * 0.65;
+        const imgAspect = img.width / img.height;
+
+        let displayW;
+        let displayH;
+        if (maxW / maxH > imgAspect) {
+          displayH = maxH;
+          displayW = displayH * imgAspect;
+        } else {
+          displayW = maxW;
+          displayH = displayW / imgAspect;
+        }
+
+        editorScale = displayW / 1080;
+        positionEditorCanvas.width = displayW;
+        positionEditorCanvas.height = displayH;
+        positionEditorCtx.clearRect(0, 0, displayW, displayH);
+        positionEditorCtx.drawImage(img, 0, 0, displayW, displayH);
+
+        activeSlideNum = slideNum;
+        activeButton = button;
+
+        positionEditorModal.classList.add("open");
+        positionEditorModal.setAttribute("aria-hidden", "false");
+
+        requestAnimationFrame(async () => {
+          updatePositionOverlayBounds();
+          const config = await fetchSlideConfig(slideNum);
+          createDraggableTextElements(config, textData);
+        });
+      };
+    }
+
+    // Load available uploaded images
+    async function loadAvailableImages() {
+      try {
+        const res = await fetch(`/api/available-images/${runId}`);
+        if (res.ok) {
+          const data = await res.json();
+          availableImages = data.images || [];
+          populateImageSelects();
+        }
+      } catch (err) {
+        console.error("Failed to load available images:", err);
+      }
+    }
+
+    // Populate all image select dropdowns
+    function populateImageSelects() {
+      document.querySelectorAll('.image-select[data-action="select-upload"]').forEach(select => {
+        // Keep the first option
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+        // Add available images
+        availableImages.forEach(img => {
+          const option = document.createElement("option");
+          option.value = img.filename;
+          option.textContent = img.filename;
+          select.appendChild(option);
+        });
+      });
+    }
+
+    // Handle tab switching
+    document.querySelectorAll('.image-change-controls').forEach(controls => {
+      controls.querySelectorAll('.image-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          const tabType = tab.dataset.tab;
+          // Update tab active state
+          controls.querySelectorAll('.image-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          // Update panel visibility
+          controls.querySelectorAll('.image-change-panel').forEach(p => p.classList.remove('active'));
+          controls.querySelector(`[data-panel="${tabType}"]`).classList.add('active');
+        });
+      });
+    });
+
+    // Handle image selection from upload
+    document.querySelectorAll('.image-select[data-action="select-upload"]').forEach(select => {
+      select.addEventListener('change', async (e) => {
+        const filename = e.target.value;
+        if (!filename) return;
+
+        const controls = e.target.closest('.image-change-controls');
+        const slideIndex = parseInt(controls.dataset.slideIndex);
+        const statusEl = controls.querySelector('.image-change-status');
+
+        statusEl.textContent = "Changing image...";
+        statusEl.className = "image-change-status";
+
+        try {
+          const res = await fetch(`/api/change-image/${runId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              slide_index: slideIndex,
+              source: "upload",
+              filename: filename
+            })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.textContent = "✓ Image changed!";
+            statusEl.className = "image-change-status success";
+            // Update the preview image
+            updateSlideImage(slideIndex, data.image_url, "upload", filename);
+          } else {
+            const err = await res.json();
+            statusEl.textContent = "✗ " + (err.detail || "Failed to change image");
+            statusEl.className = "image-change-status error";
+          }
+        } catch (err) {
+          statusEl.textContent = "✗ Error: " + err.message;
+          statusEl.className = "image-change-status error";
+        }
+
+        // Reset select
+        e.target.value = "";
+      });
+    });
+
+    // Handle external image search
+    document.querySelectorAll('.image-search-btn[data-action="search-external"]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const controls = btn.closest('.image-change-controls');
+        const slideIndex = parseInt(controls.dataset.slideIndex);
+        const input = controls.querySelector('.image-search-input[data-action="search-query"]');
+        const query = input.value.trim();
+        const statusEl = controls.querySelector('.image-change-status');
+
+        if (!query) {
+          statusEl.textContent = "Please enter a search query";
+          statusEl.className = "image-change-status error";
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = "Searching...";
+        statusEl.textContent = "Searching and downloading...";
+        statusEl.className = "image-change-status";
+
+        try {
+          const res = await fetch(`/api/change-image/${runId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              slide_index: slideIndex,
+              source: "external",
+              query: query
+            })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.textContent = "✓ Image downloaded and set!";
+            statusEl.className = "image-change-status success";
+            // Update the preview image
+            updateSlideImage(slideIndex, data.image_url, "external", query);
+            // Reload available images to include the new one
+            loadAvailableImages();
+          } else {
+            const err = await res.json();
+            statusEl.textContent = "✗ " + (err.detail || "Failed to fetch image");
+            statusEl.className = "image-change-status error";
+          }
+        } catch (err) {
+          statusEl.textContent = "✗ Error: " + err.message;
+          statusEl.className = "image-change-status error";
+        }
+
+        btn.disabled = false;
+        btn.textContent = "Search";
+      });
+    });
+
+    // Allow Enter key to trigger search
+    document.querySelectorAll('.image-search-input[data-action="search-query"]').forEach(input => {
+      input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const btn = input.closest('.image-change-panel').querySelector('.image-search-btn');
+          btn.click();
+        }
+      });
+    });
+
+    // Update slide image preview
+    function updateSlideImage(slideIndex, imageUrl, source, filenameOrQuery) {
+      const slidePreview = document.querySelector(`.slide-preview[data-slide-index="${slideIndex}"]`);
+      if (!slidePreview) return;
+
+      const imageContainer = slidePreview.querySelector('.slide-image-preview');
+      const adjustBtn = slidePreview.querySelector('[data-action="adjust-position"]');
+
+      if (imageUrl) {
+        // Add timestamp to bust cache
+        const cachedUrl = imageUrl + '?t=' + Date.now();
+        imageContainer.innerHTML = `<img src="${cachedUrl}" alt="Slide ${slideIndex + 1} preview">`;
+        if (adjustBtn) {
+          adjustBtn.disabled = false;
+          adjustBtn.removeAttribute("title");
+        }
+      } else {
+        imageContainer.innerHTML = `
+          <div class="slide-image-placeholder">
+            <div>
+              ${source === "external"
+                ? `🌐<br>External image will be<br>downloaded during generation<br><br>"${filenameOrQuery}"`
+                : `🖼️<br>Image preview<br>not available`
+              }
+            </div>
+          </div>
+        `;
+        if (adjustBtn) {
+          adjustBtn.disabled = true;
+          adjustBtn.title = "Set an image first to adjust text position";
+        }
+      }
+
+      // Update the image info section
+      const imageInfo = slidePreview.querySelector('.slide-image-info');
+      if (imageInfo) {
+        if (source === "upload") {
+          imageInfo.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span class="icon">🖼️</span>
+              <span>Uploaded: <strong>${filenameOrQuery}</strong></span>
+            </div>
+          `;
+        } else {
+          imageInfo.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span class="icon">🌐</span>
+              <span>External: "${filenameOrQuery}"</span>
+            </div>
+          `;
+        }
+      }
+    }
+
+    document.querySelectorAll('[data-action="adjust-position"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (btn.disabled) return;
+        const slideNum = parseInt(btn.dataset.slideNum);
+        openPositionEditor(slideNum, btn);
+      });
+    });
+
+    positionEditorClose.addEventListener("click", closePositionEditor);
+    positionEditorCancel.addEventListener("click", closePositionEditor);
+
+    window.addEventListener("resize", () => {
+      if (!positionEditorModal.classList.contains("open")) return;
+      updatePositionOverlayBounds();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (!positionEditorModal.classList.contains("open")) return;
+      if (e.key === "Escape") closePositionEditor();
+    });
+
+    positionEditorSave.addEventListener("click", async () => {
+      if (!activeTextElements.length || !activeSlideNum) {
+        return;
+      }
+
+      positionEditorSave.disabled = true;
+      positionEditorSave.textContent = "Saving...";
+      const positions = activeTextElements.map((item) => ({
+        type: item.type,
+        x: parseFloat(item.element.style.left) / editorScale,
+        y: parseFloat(item.element.style.top) / editorScale
+      }));
+
+      try {
+        const res = await fetch(`/api/update-slide/${runId}/${activeSlideNum}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            positions
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Failed to save position");
+        }
+
+        const savedButton = activeButton;
+        closePositionEditor();
+
+        if (savedButton) {
+          savedButton.textContent = "Position Saved";
+          setTimeout(() => {
+            savedButton.textContent = "Move Text Overlay";
+          }, 1400);
+        }
+      } catch (err) {
+        alert("Failed to save text position: " + err.message);
+      } finally {
+        positionEditorSave.disabled = false;
+        positionEditorSave.textContent = "Save Position";
+      }
+    });
 
     // Collect edited text from all slides
     function collectEdits() {
@@ -414,6 +1169,9 @@
         }
       }
     });
+
+    // Initialize
+    loadAvailableImages();
   </script>
 </body>
 </html>

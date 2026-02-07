@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import tempfile
@@ -10,14 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from PIL import Image, ImageOps
 
 from env import load_env
 from image_search import download_image
-from pipeline import generate_carousel
+from pipeline import generate_carousel, _validate_downloaded_image
 
 load_env()
 
@@ -366,7 +368,14 @@ def get_run_file(run_id: str, filename: str):
     path = output_dir / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="file not found")
-    return FileResponse(str(path))
+    return FileResponse(
+        str(path),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/run/{run_id}/photo/{filename}")
@@ -387,7 +396,77 @@ def get_run_photo(run_id: str, filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="photo not found")
 
-    return FileResponse(str(path))
+    return FileResponse(
+        str(path),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/api/editor-bg/{run_id}/{slide_num}")
+def get_editor_background(run_id: str, slide_num: int):
+    """Serve a 1080x1350 cropped image using the same fit/centering as renderer."""
+    run = RUNS.get(run_id) or _load_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    run_dir = RUNS_DIR / run_id
+    config_path = run_dir / "run_config.json"
+    config = None
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
+
+    if config is None:
+        plan = run.get("plan")
+        if not plan or "config" not in plan:
+            raise HTTPException(status_code=404, detail="config not found")
+        config = plan["config"]
+
+    slides = config.get("slides", [])
+    if slide_num < 1 or slide_num > len(slides):
+        raise HTTPException(status_code=404, detail="slide not found")
+
+    slide = slides[slide_num - 1]
+    photo_filename = slide.get("photo")
+    if not photo_filename:
+        raise HTTPException(status_code=404, detail="slide photo not found")
+
+    photos_dir = Path(config.get("photos_dir", ""))
+    photo_path = photos_dir / photo_filename
+    if not photo_path.exists():
+        raise HTTPException(status_code=404, detail="photo not found")
+
+    centering = slide.get("centering", [0.5, 0.35])
+    try:
+        cx = float(centering[0])
+        cy = float(centering[1])
+    except Exception:
+        cx, cy = 0.5, 0.35
+
+    try:
+        with Image.open(photo_path) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            fitted = ImageOps.fit(img, (1080, 1350), method=Image.LANCZOS, centering=(cx, cy))
+            buf = io.BytesIO()
+            fitted.save(buf, format="JPEG", quality=95)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to render editor background: {e}")
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/status/{run_id}")
@@ -550,9 +629,156 @@ def approve_plan(run_id: str, payload: ApproveRequest = None):
     return JSONResponse({"message": "Plan approved, rendering started", "run_id": run_id})
 
 
+class ChangeImageRequest(BaseModel):
+    slide_index: int
+    source: str  # "upload" or "external"
+    filename: str | None = None  # For upload source - existing file in photos_dir
+    query: str | None = None  # For external source - search query
+
+
+@app.get("/api/available-images/{run_id}")
+def get_available_images(run_id: str):
+    """Get list of available uploaded images for a run"""
+    run = RUNS.get(run_id) or _load_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    plan = run.get("plan")
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan not found")
+
+    # Get photos directory
+    photos_dir = Path(plan["config"].get("photos_dir", ""))
+    if not photos_dir.exists():
+        return JSONResponse({"images": []})
+
+    # List all image files
+    images = []
+    for ext in ["*.jpg", "*.jpeg", "*.png", "*.webp"]:
+        for img_path in photos_dir.glob(ext):
+            images.append({
+                "filename": img_path.name,
+                "url": f"/run/{run_id}/photo/{img_path.name}"
+            })
+
+    return JSONResponse({"images": sorted(images, key=lambda x: x["filename"])})
+
+
+@app.post("/api/change-image/{run_id}")
+def change_slide_image(run_id: str, payload: ChangeImageRequest):
+    """Change the image for a specific slide"""
+    run = RUNS.get(run_id) or _load_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    plan = run.get("plan")
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan not found")
+
+    config = plan["config"]
+    slides = config.get("slides", [])
+
+    if payload.slide_index < 0 or payload.slide_index >= len(slides):
+        raise HTTPException(status_code=400, detail="Invalid slide index")
+
+    slide = slides[payload.slide_index]
+    photos_dir = Path(config.get("photos_dir", ""))
+
+    if payload.source == "upload":
+        # Use an existing uploaded image
+        if not payload.filename:
+            raise HTTPException(status_code=400, detail="Filename required for upload source")
+
+        # Verify file exists
+        img_path = photos_dir / payload.filename
+        if not img_path.exists():
+            raise HTTPException(status_code=404, detail=f"Image not found: {payload.filename}")
+
+        # Update slide
+        slide["photo"] = payload.filename
+        slide["image"] = {
+            "source": "upload",
+            "filename": payload.filename,
+            "description": f"User-selected image: {payload.filename}",
+            "reasoning": "Manually selected by user"
+        }
+
+    elif payload.source == "external":
+        # Search and download a new image
+        if not payload.query:
+            raise HTTPException(status_code=400, detail="Query required for external source")
+
+        try:
+            from image_search import search_images, download_image
+
+            # Search for images - returns list of URL strings
+            urls = search_images(payload.query, max_results=8)
+            if not urls:
+                raise HTTPException(status_code=404, detail="No images found for query")
+
+            # Try downloading each URL until one succeeds validation
+            downloaded_path = None
+            for url in urls:
+                if not url:
+                    continue
+
+                # Generate filename
+                filename = f"external_{payload.slide_index + 1}_{os.urandom(4).hex()}.jpg"
+                out_path = photos_dir / filename
+
+                # Download
+                if download_image(url, str(out_path)):
+                    # Validate (min 800x800)
+                    if _validate_downloaded_image(str(out_path)):
+                        downloaded_path = out_path
+                        break
+                    else:
+                        out_path.unlink(missing_ok=True)
+
+            if not downloaded_path:
+                raise HTTPException(status_code=500, detail="Could not find image large enough (min 800x800). Try a different search query.")
+
+            # Update slide
+            slide["photo"] = downloaded_path.name
+            slide["image"] = {
+                "source": "external",
+                "filename": downloaded_path.name,
+                "query": payload.query,
+                "description": f"External image for: {payload.query}",
+                "reasoning": "Downloaded via user search"
+            }
+
+        except HTTPException:
+            raise
+        except ImportError as e:
+            raise HTTPException(status_code=500, detail=f"Image search not available: {e}")
+        except Exception as e:
+            import traceback
+            raise HTTPException(status_code=500, detail=f"Failed to fetch image: {e}")
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid source. Use 'upload' or 'external'")
+
+    # Save updated plan
+    RUNS[run_id]["plan"] = plan
+    _save_run(run_id, RUNS[run_id])
+
+    # Return updated slide info
+    image_url = f"/run/{run_id}/photo/{slide['photo']}" if slide.get("photo") else None
+
+    return JSONResponse({
+        "message": "Image changed successfully",
+        "slide_index": payload.slide_index,
+        "filename": slide.get("photo"),
+        "image_url": image_url,
+        "source": payload.source
+    })
+
+
 class UpdateSlideRequest(BaseModel):
     positions: list[dict[str, Any]]
     text_updates: dict[str, str] | None = None  # For editing text content
+    size_updates: dict[str, float] | None = None  # Per-text size scale (kicker/title/body)
 
 
 @app.get("/api/slide-config/{run_id}/{slide_num}")
@@ -562,20 +788,23 @@ def get_slide_config(run_id: str, slide_num: int):
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
 
-    result = run.get("result")
-    if not result:
-        raise HTTPException(status_code=404, detail="result not found")
-
-    # Load the config file
     run_dir = RUNS_DIR / run_id
     config_path = run_dir / "run_config.json"
-    if not config_path.exists():
-        raise HTTPException(status_code=404, detail="config not found")
+    config = None
 
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
+    # Read render config if available (post-render editing).
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
+
+    # Fallback to draft plan config (pre-render editing).
+    if config is None:
+        plan = run.get("plan")
+        if not plan or "config" not in plan:
+            raise HTTPException(status_code=404, detail="config not found")
+        config = plan["config"]
 
     # Find the slide (1-indexed)
     slides = config.get("slides", [])
@@ -583,36 +812,100 @@ def get_slide_config(run_id: str, slide_num: int):
         raise HTTPException(status_code=404, detail="slide not found")
 
     slide = slides[slide_num - 1]
+    photo_filename = slide.get("photo")
+    photo_url = f"/run/{run_id}/photo/{photo_filename}" if photo_filename else None
 
     # Extract text positions
-    # The positions are stored in the centering field [x, y] normalized to 0-1
+    # Primary source: manual_positions (per-text, normalized 0-1)
+    # Fallback: centering plus estimated offsets
     # Convert to pixel positions (assuming 1080x1350 canvas)
     width = 1080
     height = 1350
     centering = slide.get("centering", [0.5, 0.35])
+    manual_positions = slide.get("manual_positions") or {}
+    manual_scales = slide.get("manual_scales") or {}
+
+    def _manual_pos(text_type: str) -> tuple[float, float] | None:
+        pos = manual_positions.get(text_type)
+        if not isinstance(pos, (list, tuple)) or len(pos) != 2:
+            return None
+        try:
+            x = float(pos[0])
+            y = float(pos[1])
+        except Exception:
+            return None
+        # Treat small-magnitude values as normalized coordinates.
+        # This tolerates slight overflow from dragging near the edges.
+        if -2.0 <= x <= 2.0 and -2.0 <= y <= 2.0:
+            return x * width, y * height
+        return x, y
+
+    # Calculate positions - centering is the center point of the text block
+    center_x = float(centering[0]) * width
+    center_y = float(centering[1]) * height
+
+    # Estimate offsets based on typical text sizes
+    # Kicker: ~24px font, positioned above title
+    # Title: ~72px font (main element)
+    # Body: ~32px font, positioned below title
+    has_kicker = bool(slide.get("kicker"))
+    has_body = bool(slide.get("body"))
+
+    # Title is at the centering point
+    title_y = center_y
+
+    # Adjust title position if there are other elements
+    if has_kicker and has_body:
+        # Text block has all three - title is in middle
+        kicker_offset = -80  # Above title
+        body_offset = 100    # Below title
+    elif has_kicker:
+        # Just kicker and title
+        kicker_offset = -60
+        body_offset = 0
+    elif has_body:
+        # Just title and body
+        kicker_offset = 0
+        body_offset = 80
+    else:
+        # Just title
+        kicker_offset = 0
+        body_offset = 0
+
+    manual_title = _manual_pos("title")
+    title_x = manual_title[0] if manual_title else center_x
+    title_y = manual_title[1] if manual_title else center_y
 
     response = {
         "title": slide.get("title", ""),
+        "photo_url": photo_url,
+        "editor_bg_url": f"/api/editor-bg/{run_id}/{slide_num}",
+        "centering": centering,
+        "scales": {
+            "kicker": float(manual_scales.get("kicker", 1.0)),
+            "title": float(manual_scales.get("title", 1.0)),
+            "body": float(manual_scales.get("body", 1.0)),
+        },
         "title_pos": {
-            "x": int(centering[0] * width),
-            "y": int(centering[1] * height)
+            "x": title_x,
+            "y": title_y
         }
     }
 
-    if slide.get("kicker"):
+    if has_kicker:
+        manual_kicker = _manual_pos("kicker")
         response["kicker"] = slide["kicker"]
-        # Kicker is above title
         response["kicker_pos"] = {
-            "x": int(centering[0] * width),
-            "y": int(centering[1] * height - 50)  # Approximate offset
+            "x": manual_kicker[0] if manual_kicker else title_x,
+            "y": manual_kicker[1] if manual_kicker else title_y + kicker_offset
         }
 
-    if slide.get("body"):
+    if has_body:
+        manual_body = _manual_pos("body")
         response["body"] = slide["body"]
-        # Body is below title
         response["body_pos"] = {
-            "x": int(centering[0] * width),
-            "y": int(centering[1] * height + 100)  # Approximate offset
+            "x": manual_body[0] if manual_body else title_x,
+            "y": manual_body[1] if manual_body else title_y + body_offset
         }
 
     return JSONResponse(response)
@@ -625,83 +918,157 @@ def update_slide(run_id: str, slide_num: int, payload: UpdateSlideRequest):
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
 
-    result = run.get("result")
-    if not result:
-        raise HTTPException(status_code=404, detail="result not found")
-
-    # Load the config file
     run_dir = RUNS_DIR / run_id
     config_path = run_dir / "run_config.json"
-    if not config_path.exists():
-        raise HTTPException(status_code=404, detail="config not found")
+    has_render_config = config_path.exists()
+    result = run.get("result")
 
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
+    # Use render config when present; otherwise update draft plan config.
+    if has_render_config:
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
+    else:
+        plan = run.get("plan")
+        if not plan or "config" not in plan:
+            raise HTTPException(status_code=404, detail="config not found")
+        config = plan["config"]
 
     # Find the slide
     slides = config.get("slides", [])
     if slide_num < 1 or slide_num > len(slides):
         raise HTTPException(status_code=404, detail="slide not found")
 
+    slide_data = slides[slide_num - 1]
+
     # Update text content if provided
     if payload.text_updates:
         for text_type, new_text in payload.text_updates.items():
             if text_type in ["kicker", "title", "body"]:
                 if new_text.strip():
-                    slides[slide_num - 1][text_type] = new_text
-                elif text_type in slides[slide_num - 1]:
+                    slide_data[text_type] = new_text
+                elif text_type in slide_data:
                     # Remove empty text fields
-                    del slides[slide_num - 1][text_type]
+                    del slide_data[text_type]
 
     # Update positions
+    # - Persist per-text manual_positions for independent editing
+    # - Keep title as centering for backward compatibility
     # Convert pixel positions back to normalized 0-1 coordinates
     width = 1080
     height = 1350
+    manual_positions = slide_data.get("manual_positions")
+    if not isinstance(manual_positions, dict):
+        manual_positions = {}
+    manual_scales = slide_data.get("manual_scales")
+    if not isinstance(manual_scales, dict):
+        manual_scales = {}
 
     for pos in payload.positions:
         pos_type = pos.get("type")
         x = pos.get("x", 0)
         y = pos.get("y", 0)
+        if pos_type not in ("kicker", "title", "body"):
+            continue
+        nx = x / width
+        ny = y / height
+        manual_positions[pos_type] = [nx, ny]
 
         if pos_type == "title":
-            # Update centering based on title position
-            slides[slide_num - 1]["centering"] = [x / width, y / height]
+            # Title position becomes the centering point
+            slide_data["centering"] = [nx, ny]
 
-    # Save updated config
-    try:
-        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
+    if manual_positions:
+        slide_data["manual_positions"] = manual_positions
+    elif "manual_positions" in slide_data:
+        del slide_data["manual_positions"]
+
+    if payload.size_updates:
+        for text_type, scale in payload.size_updates.items():
+            if text_type not in ("kicker", "title", "body"):
+                continue
+            try:
+                manual_scales[text_type] = float(scale)
+            except Exception:
+                continue
+    if manual_scales:
+        slide_data["manual_scales"] = manual_scales
+    elif "manual_scales" in slide_data:
+        del slide_data["manual_scales"]
+
+    # Save run config only when it exists (post-render mode).
+    if has_render_config:
+        try:
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")
+
+    # Keep draft plan config in sync for preview and re-render flow.
+    plan = run.get("plan")
+    if plan and "config" in plan:
+        plan_slides = plan["config"].get("slides", [])
+        if 1 <= slide_num <= len(plan_slides):
+            plan_slide = plan_slides[slide_num - 1]
+            plan_slide["centering"] = slide_data.get("centering", [0.5, 0.35])
+            for key in ("kicker", "title", "body"):
+                if key in slide_data:
+                    plan_slide[key] = slide_data[key]
+                elif key in plan_slide:
+                    del plan_slide[key]
+            if "manual_positions" in slide_data:
+                plan_slide["manual_positions"] = slide_data["manual_positions"]
+            elif "manual_positions" in plan_slide:
+                del plan_slide["manual_positions"]
+            if "manual_scales" in slide_data:
+                plan_slide["manual_scales"] = slide_data["manual_scales"]
+            elif "manual_scales" in plan_slide:
+                del plan_slide["manual_scales"]
+        run["plan"] = plan
+        RUNS[run_id] = run
+        _save_run(run_id, run)
+
+    # Draft mode: no rendered outputs yet, so only persist updates.
+    if not (result and has_render_config):
+        return JSONResponse({"message": "Slide draft updated successfully", "slide_num": slide_num})
 
     # Re-render the slide
+    temp_render_dir: Path | None = None
+    temp_config_path: Path | None = None
     try:
         import subprocess
 
-        slide_data = slides[slide_num - 1]
         output_dir = Path(result["output_dir"])
         output_filename = f"Artboard {slide_num}.jpg"
         output_path = output_dir / output_filename
 
-        # Get photos directory from config
+        # Get paths from config
         photos_dir = config.get("photos_dir", str(run_dir / "photos"))
+        temp_render_dir = run_dir / f".single_render_tmp_{slide_num}_{os.urandom(4).hex()}"
+        temp_render_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create a temp config file for rendering this slide
+        # Create a temp config file for rendering this single slide
+        # Include all necessary fields from the original slide config
         temp_config = {
-            "photos_dir": photos_dir,  # Directory where original images are
-            "output_dir": str(output_dir),  # Where to save output
-            "logo_path": config.get("logo_path", "/Users/sirasasitorn/.openclaw/workspace/assets/logos/Logo JL.png"),
+            "photos_dir": photos_dir,
+            "output_dir": str(temp_render_dir),
+            "logo_path": config.get("logo_path", ""),
             "slides": [{
                 "photo": slide_data.get("photo", ""),
                 "kicker": slide_data.get("kicker"),
                 "title": slide_data.get("title", ""),
                 "body": slide_data.get("body"),
-                "centering": slide_data.get("centering", [0.5, 0.35])
+                "centering": slide_data.get("centering", [0.5, 0.35]),
+                "manual_positions": slide_data.get("manual_positions"),
+                "manual_scales": slide_data.get("manual_scales"),
+                # Include override if present (align, anchor, fade)
+                "override": slide_data.get("override"),
+                # Include subject_region for split layout decisions
+                "subject_region": slide_data.get("subject_region"),
             }]
         }
 
-        temp_config_path = output_dir / f"temp_config_{slide_num}.json"
+        temp_config_path = run_dir / f"temp_config_{slide_num}_{os.urandom(4).hex()}.json"
         temp_config_path.write_text(json.dumps(temp_config, indent=2), encoding="utf-8")
 
         # Set environment variable for renderer
@@ -710,24 +1077,36 @@ def update_slide(run_id: str, slide_num: int, payload: UpdateSlideRequest):
 
         # Run the renderer
         render_script = PROJECT_DIR / "ig-carousel-skia.py"
-        result = subprocess.run(
+        proc_result = subprocess.run(
             ["python3", str(render_script)],
             env=env,
-            check=True,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=60
         )
 
-        # Rename output to match expected filename
-        rendered_output = output_dir / "Artboard 1.jpg"
-        if rendered_output.exists():
-            rendered_output.rename(output_path)
+        if proc_result.returncode != 0:
+            raise Exception(f"Renderer failed: {proc_result.stderr}")
 
-        # Clean up temp file
-        temp_config_path.unlink(missing_ok=True)
+        # Move isolated render output into the target artboard path.
+        rendered_output = temp_render_dir / "Artboard 1.jpg"
+        if not rendered_output.exists():
+            raise Exception("Renderer completed but did not produce Artboard 1.jpg")
+
+        # Replace the target artboard atomically.
+        if output_path.exists():
+            output_path.unlink()
+        rendered_output.replace(output_path)
 
         return JSONResponse({"message": "Slide updated successfully", "slide_num": slide_num})
 
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Rendering timed out")
     except Exception as e:
         import traceback
-        raise HTTPException(status_code=500, detail=f"Failed to re-render slide: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to re-render slide: {e}")
+    finally:
+        if temp_config_path is not None:
+            temp_config_path.unlink(missing_ok=True)
+        if temp_render_dir is not None:
+            shutil.rmtree(temp_render_dir, ignore_errors=True)

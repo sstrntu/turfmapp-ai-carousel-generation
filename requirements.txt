@@ -8,3 +8,4 @@ numpy>=1.24
 skia-python>=87
 requests>=2.32
 ddgs>=1.0.0
+opencv-python-headless>=4.8
